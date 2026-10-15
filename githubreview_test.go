@@ -1,7 +1,13 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,5 +51,51 @@ func TestPRRemoteName(t *testing.T) {
 	}
 	if got := prRemoteName(a, "zenact-ai", "other"); got != "" {
 		t.Fatalf("no matching remote: %q", got)
+	}
+}
+
+// fakeGitHub stands in for api.github.com; it records "METHOD path?query".
+func fakeGitHub(t *testing.T, handle func(w http.ResponseWriter, r *http.Request)) *[]string {
+	t.Helper()
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		handle(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	old := githubAPIBase
+	githubAPIBase = srv.URL
+	t.Cleanup(func() { githubAPIBase = old })
+	return &seen
+}
+
+func TestPRNumberFor(t *testing.T) {
+	root := workspaceFixture(t)
+	a := filepath.Join(root, "alpha")
+	gitTestRun(t, a, "remote", "add", "origin", "https://github.com/me/x.git")
+	gitTestRun(t, a, "remote", "add", "upstream", "https://github.com/o/x.git")
+	seen := fakeGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("head") == "me:feat" {
+			json.NewEncoder(w).Encode([]any{map[string]any{"number": 42}})
+			return
+		}
+		json.NewEncoder(w).Encode([]any{})
+	})
+	ctx := context.Background()
+	o, rp, n, err := prNumberFor(ctx, "tok", checkout{Prefix: "alpha-wt", Abs: filepath.Join(root, "alpha-wt")})
+	if err != nil || o != "o" || rp != "x" || n != 42 {
+		t.Fatalf("branch lookup: %s %s %d %v", o, rp, n, err)
+	}
+	if len(*seen) != 1 || !strings.Contains((*seen)[0], "/repos/o/x/pulls") || !strings.Contains((*seen)[0], "state=open") {
+		t.Fatalf("requests = %v", *seen)
+	}
+	if _, _, _, err := prNumberFor(ctx, "tok", checkout{Prefix: "alpha", Abs: a}); !errors.Is(err, errNoPR) {
+		t.Fatalf("main has no PR: err = %v, want errNoPR", err)
+	}
+	// A review checkout names its PR; no lookup needed.
+	gitTestRun(t, a, "worktree", "add", "-q", "--detach", filepath.Join(root, "alpha-review-pr7"))
+	*seen = nil
+	if _, _, n, err := prNumberFor(ctx, "tok", checkout{Prefix: "alpha-review-pr7", Abs: filepath.Join(root, "alpha-review-pr7")}); err != nil || n != 7 || len(*seen) != 0 {
+		t.Fatalf("review checkout: %d %v, requests %v", n, err, *seen)
 	}
 }

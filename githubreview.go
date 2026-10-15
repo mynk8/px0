@@ -1,7 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -90,4 +98,47 @@ func srcRemoteFor(srcRepo string, target PRTarget) string {
 		}
 	}
 	return "origin"
+}
+
+// errNoPR: the checkout's branch has no open pull request.
+var errNoPR = errors.New("no pull request for this checkout")
+
+// reviewCheckoutRe matches the worktrees px0 creates to review a PR.
+var reviewCheckoutRe = regexp.MustCompile(`-review-pr(\d+)$`)
+
+// prNumberFor finds a checkout's pull request: a review checkout names it;
+// otherwise it is the open PR whose head is the checkout's branch on the
+// remote the branch is pushed to.
+func prNumberFor(ctx context.Context, token string, c checkout) (owner, repo string, number int, err error) {
+	branch := gitCurrentBranch(c.Abs)
+	owner, repo, headOwner, ok := prRepoFor(c.Abs, branch)
+	if !ok {
+		return "", "", 0, errNoPR
+	}
+	if m := reviewCheckoutRe.FindStringSubmatch(filepath.Base(c.Abs)); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return owner, repo, n, nil
+	}
+	if branch == "" || branch == "HEAD" {
+		return "", "", 0, errNoPR
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls?state=open&per_page=5&head=%s", owner, repo, url.QueryEscape(headOwner+":"+branch))
+	resp, err := githubRequest(ctx, "GET", path, token, nil)
+	if err != nil {
+		return "", "", 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", "", 0, fmt.Errorf("github: %s", resp.Status)
+	}
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&prs); err != nil {
+		return "", "", 0, err
+	}
+	if len(prs) == 0 {
+		return "", "", 0, errNoPR
+	}
+	return owner, repo, prs[0].Number, nil
 }
