@@ -191,6 +191,24 @@ export function collapseAllDirs() {
   persistOpenDirs();
 }
 
+// Opens every checkout row the workspace root lists, one level deep.
+async function expandCheckoutRows() {
+  const version = ++expansionVersion;
+  for (const row of treeEl.querySelectorAll('.tr.ws-co:not(.open)')) {
+    if (version !== expansionVersion) return;
+    const path = row.dataset.dir;
+    const kids = treeEl.querySelector('[data-kids="' + CSS.escape(path) + '"]');
+    if (!kids) continue;
+    row.classList.add('open');
+    kids.classList.add('open');
+    openDirs.add(path);
+    if (!kids.dataset.loaded && await drawTree(path, kids, path.split('/').length, () => version === expansionVersion)) {
+      kids.dataset.loaded = '1';
+    }
+  }
+  persistOpenDirs();
+}
+
 export async function expandAllDirs() {
   if (treeEl.classList.contains('changed-only') || $('#btn-expand-tree')?.classList.contains('busy')) return;
   const version = ++expansionVersion;
@@ -515,8 +533,8 @@ export async function setSidebarMode(mode) {
     treeEl.classList.add('changed-only');
     btnChanged?.classList.add('active');
     btnFiles?.classList.remove('active');
-    if (btnCollapse) btnCollapse.hidden = true;
-    if (btnExpand) btnExpand.hidden = true;
+    if (btnCollapse) btnCollapse.hidden = false;
+    if (btnExpand) btnExpand.hidden = false;
     expansionVersion++;
     setExpandBusy(false);
     await expandDirtyDirs();
@@ -608,12 +626,21 @@ export function initTree() {
   }
 
   $('#btn-collapse-tree')?.addEventListener('click', () => {
-    if (treeEl.classList.contains('changed-only')) return;
     collapseAllDirs();
   });
 
-  $('#btn-expand-tree')?.addEventListener('click', () => {
-    expandAllDirs();
+  // Expand all, per view: changes open down to every changed file; an
+  // unscoped workspace opens each listed checkout one level (not every file
+  // of every checkout); otherwise px0's full expand.
+  $('#btn-expand-tree')?.addEventListener('click', async () => {
+    if (treeEl.classList.contains('changed-only')) {
+      expansionVersion++;
+      await expandDirtyDirs();
+    } else if (isWorkspace() && !S.scope) {
+      await expandCheckoutRows();
+    } else {
+      expandAllDirs();
+    }
   });
 
   $('#btn-changed')?.addEventListener('click', async () => {
