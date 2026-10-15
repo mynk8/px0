@@ -6,6 +6,7 @@ import { showToast, copyToClipboard } from './ui.js';
 import { closeSelMenu } from './selbar.js';
 import { emit, on } from './bus.js';
 import { isAutoRevealEnabled } from './settings.js';
+import { isWorkspace, drawWorkspaceRoot, setScope, setView, setRedraw } from './workspace.js';
 
 export const treeEl = $('#tree');
 const treeMenu = $('#tree-menu');
@@ -128,7 +129,7 @@ export async function refreshTree() {
   const version = ++expansionVersion;
   const isCurrent = () => version === expansionVersion;
   setExpandBusy(false);
-  if (!(await drawTree('', treeEl, 0, isCurrent))) return;
+  if (!(await drawRoot(isCurrent))) return;
   const dirs = Array.from(openDirs).sort((a, b) => a.split('/').length - b.split('/').length);
   for (const path of dirs) {
     if (!isCurrent()) return;
@@ -153,6 +154,17 @@ export async function refreshTree() {
     await expandDirtyDirs();
   }
   markTreeCleanState();
+}
+
+// The explorer root: in workspace mode the checkouts (or the one scoped
+// checkout's tree), otherwise the served folder.
+async function drawRoot(isCurrent) {
+  if (isWorkspace() && S.scope) return drawTree(S.scope, treeEl, 0, isCurrent);
+  if (isWorkspace()) {
+    await drawWorkspaceRoot(treeEl);
+    return !isCurrent || isCurrent();
+  }
+  return drawTree('', treeEl, 0, isCurrent);
 }
 
 export function restoreOpenDirs(dirs) {
@@ -486,6 +498,15 @@ export function updateSidebarToggleState() {
 export async function setSidebarMode(mode) {
   const btnChanged = $('#btn-changed');
   const btnFiles = $('#btn-files');
+  const btnSet = $('#btn-set');
+  if (btnSet) btnSet.hidden = !isWorkspace();
+  if (isWorkspace()) {
+    // Working set / Changes / All: which checkouts the root lists.
+    const view = mode === 'set' ? 'set' : (mode === 'git' && hasGitView() ? 'changes' : (mode === 'git' ? 'set' : 'all'));
+    setView(view);
+    if (view === 'set') mode = 'set';
+    btnSet?.classList.toggle('active', view === 'set');
+  }
   const btnCollapse = $('#btn-collapse-tree');
   const btnExpand = $('#btn-expand-tree');
   updateSidebarToggleState();
@@ -501,11 +522,12 @@ export async function setSidebarMode(mode) {
     await expandDirtyDirs();
   } else {
     treeEl.classList.remove('changed-only');
-    btnFiles?.classList.add('active');
+    btnFiles?.classList.toggle('active', mode !== 'set');
     btnChanged?.classList.remove('active');
     if (btnCollapse) btnCollapse.hidden = false;
     if (btnExpand) btnExpand.hidden = false;
   }
+  if (isWorkspace() && !S.scope) await refreshTree();
   markTreeCleanState();
   // unpushed.js hangs its section off this; tree.js doesn't import it.
   emit('sidebar:mode', { mode: treeEl.classList.contains('changed-only') ? 'git' : 'files' });
@@ -554,6 +576,7 @@ export function openTreeMenu(row, x, y) {
 
 export function initTree() {
   updateSidebarToggleState();
+  setRedraw(refreshTree);
 
   if (treeMenu) {
     treeMenu.addEventListener('mousedown', e => e.preventDefault());
@@ -602,6 +625,10 @@ export function initTree() {
     await setSidebarMode('files');
   });
 
+  $('#btn-set')?.addEventListener('click', async () => {
+    await setSidebarMode('set');
+  });
+
   treeEl.addEventListener('contextmenu', e => {
     const row = e.target.closest('[data-file], [data-dir]');
     if (!row) return;
@@ -611,6 +638,12 @@ export function initTree() {
   });
 
   treeEl.addEventListener('click', async e => {
+    const focus = e.target.closest('.ws-focus');
+    if (focus) {
+      e.stopPropagation();
+      setScope(focus.dataset.focus);
+      return;
+    }
     const menuBtn = e.target.closest('.tr-menu-btn');
     if (menuBtn) {
       e.stopPropagation();

@@ -1,5 +1,5 @@
 // web/src/search.js
-import { $, $$, esc, api, debounce } from './state.js';
+import { $, $$, esc, api, debounce, S } from './state.js';
 import { openFile } from './tabs.js';
 import { flashFind } from './lsp.js';
 
@@ -34,6 +34,7 @@ export const runSearch = debounce(async () => {
     case: $('#o-case')?.classList.contains('on') ? 1 : '',
     word: $('#o-word')?.classList.contains('on') ? 1 : '',
     re: $('#o-re')?.classList.contains('on') ? 1 : '',
+    scope: S.scope || '',
   };
   try {
     const j = await api('/api/search', params, { signal: controller.signal });

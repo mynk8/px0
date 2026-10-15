@@ -96,7 +96,20 @@ func NewGitWatcher(ix *Index) *GitWatcher {
 
 // Start begins the background monitoring goroutine.
 func (gw *GitWatcher) Start(ctx context.Context) {
-	if gitDisabled || !gw.ix.GitOn() {
+	if gitDisabled {
+		return
+	}
+	if !gw.ix.Ready() && !gitAvailable(gw.root) {
+		// Not a repo: whether it is a workspace of checkouts is only known
+		// once the background index build has walked it.
+		go func() {
+			if gw.ix.WaitReady(ctx) == nil {
+				gw.Start(ctx)
+			}
+		}()
+		return
+	}
+	if !gw.ix.GitOn() {
 		return
 	}
 	if gw.ix.Workspace() {

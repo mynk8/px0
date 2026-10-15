@@ -2984,3 +2984,39 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 .thr-scope button.active { color: var(--accent-fg); border-color: var(--accent); background: var(--bg2); }
 .thr-scope button:disabled { opacity: .4; cursor: default; }
 .thr-compose { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }
+
+/* ---------- workspace mode (folder of checkouts) ---------- */
+/* Checkout rows reuse tree rows; the branch, note and counts are muted extras. */
+.tr.ws-co .nm { flex: none; max-width: 55%; }
+.tr .ws-br { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 10.5px/1 var(--mono); color: var(--faint); }
+.tr .ws-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-style: italic; color: var(--dim); }
+.tr .ws-n, .tr .ws-up { flex: none; font: 600 10px/1 var(--mono); padding: 0 2px; }
+.tr .ws-n { margin-left: auto; color: var(--accent-fg); }
+.tr .ws-up { color: var(--dim); }
+.tr .ws-agent + .ws-n, .tr .ws-agent ~ .ws-up { margin-left: 0; }
+.tr .ws-agent {
+  margin-left: auto; flex: none; font: 600 9.5px/1 var(--mono); padding: 2px 4px;
+  border-radius: var(--r); color: var(--accent-fg); border: 1px solid var(--accent);
+}
+.tr .ws-n ~ .ws-up { margin-left: 0; }
+.tr .ws-focus {
+  flex: none; width: 16px; height: 16px; padding: 0; margin-left: 2px; border: 0; background: none;
+  display: inline-flex; align-items: center; justify-content: center; color: var(--faint);
+  border-radius: var(--r); opacity: 0; cursor: pointer;
+}
+.tr:hover .ws-focus { opacity: .8; }
+.tr .ws-focus:hover { opacity: 1; color: var(--fg); background: var(--bg3); }
+.tr.ws-co:not(:has(.ws-agent, .ws-n, .ws-up)) .ws-focus { margin-left: auto; }
+.ws-group { padding: 6px 8px 2px; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-empty { padding: 10px 12px; font-size: 12px; color: var(--dim); line-height: 1.5; }
+.ws-empty code { font: 11px var(--mono); }
+.ws-scope {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 12px;
+  border-bottom: 1px solid var(--line, var(--bg3)); white-space: nowrap;
+}
+.ws-scope[hidden] { display: none; }
+.ws-scope .ws-scope-name { overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.ws-scope .ws-br { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 10.5px var(--mono); color: var(--faint); }
+.ws-scope button { margin-left: auto; border: 0; background: none; color: var(--faint); cursor: pointer; padding: 0 2px; }
+.ws-scope button:hover { color: var(--fg); }
+#tree.changed-only .tw:has(> .tr.ws-co .ws-up) { display: block; }

@@ -1,3 +1,4 @@
+import { onRepos } from './workspace.js';
 import { S, apiPost, doc_ } from './state.js';
 import { updateSidebarToggleState, patchTreeGitStatus, treeEl, setSidebarMode, hasGitView } from './tree.js';
 import { drawTabs, loadGutter, closeTab, reloadOpenTabs } from './tabs.js';
@@ -171,6 +172,7 @@ async function handleGitStatus(data) {
   }
   lastSig = sig;
 
+  if (data.workspace) onRepos(data.repos);
   if (data.gitChanges !== undefined) S.meta.gitChanges = data.gitChanges;
   if (data.gitFiles !== undefined) S.meta.gitFiles = data.gitFiles;
 

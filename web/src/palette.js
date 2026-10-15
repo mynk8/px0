@@ -159,7 +159,7 @@ export const refreshPalette = debounce(async () => {
     pal.items = q ? [{ kind: 'openpr', target: q, label: 'Open PR: ' + esc(q), sub: 'Enter to open in a new tab', raw: true }] : [];
   } else {
     let j;
-    try { j = await api('/api/find', { q, limit: 120 }); } catch { return; }
+    try { j = await api('/api/find', { q, limit: 120, scope: S.scope }); } catch { return; }
     pal.items = j.results.map(r => {
       const cut = r.path.length - r.name.length;
       return {

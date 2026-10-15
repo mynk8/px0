@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // workspaceFixture builds a folder of checkouts like ~/workspace/zenact:
@@ -435,4 +437,30 @@ func TestWorkspaceAgentRunsInCheckout(t *testing.T) {
 	if !strings.Contains(string(prompt), "@sub/s.go line 1") {
 		t.Fatalf("prompt should name the file relative to the checkout:\n%s", prompt)
 	}
+}
+
+// The server starts its watcher before the background index build finishes;
+// in workspace mode the checkouts are only known after it, so the watcher
+// must wait for the index instead of deciding git is off.
+func TestWatcherStartedBeforeBuildWatchesCheckouts(t *testing.T) {
+	root := workspaceFixture(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ix := NewIndex(root)
+	gw := NewGitWatcher(ix)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gw.Start(ctx)
+	ix.Build()
+	gw.Refresh()
+	runSetCmd([]string{"add", filepath.Join(root, "beta"), "-note", "live"}, io.Discard)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, r := range gw.RepoStates() {
+			if r.Path == "beta" && r.InSet {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("watcher never picked up the working set: it did not start for the workspace")
 }

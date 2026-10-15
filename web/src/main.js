@@ -28,6 +28,7 @@ import { initGitPanel } from './gitpanel.js';
 import { initPR } from './pr.js';
 import { initLineComment } from './linecomment.js';
 import { initUnpushed, refreshUnpushed } from './unpushed.js';
+import { initWorkspace, loadRepos, isWorkspace, renderScopeBar } from './workspace.js';
 import { initPRScope } from './prscope.js';
 
 // Initialize all subsystems
@@ -112,6 +113,9 @@ initPRScope();
       restoreOpenDirs(session.openDirs);
     }
   } catch {}
+  initWorkspace();
+  await loadRepos();
+  renderScopeBar();
   await refreshTree();
   initGitStream();
 
@@ -125,6 +129,11 @@ initPRScope();
     // still belongs in Git view, which is the only place they are listed.
     await refreshUnpushed();
     const showGit = hasGitView();
+    if (isWorkspace()) {
+      // The working set first: what agents are on is what to review now.
+      await setSidebarMode(S.wsView === 'changes' ? 'git' : (S.wsView === 'all' ? 'files' : 'set'));
+      return !!(S.meta?.git && S.meta.gitChanges > 0);
+    }
     await setSidebarMode(showGit ? 'git' : 'files');
     return !!(S.meta?.git && S.meta.gitChanges > 0);
   };

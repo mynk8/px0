@@ -1,0 +1,162 @@
+// web/src/workspace.js
+// Workspace mode: the opened folder holds many checkouts (repos and linked
+// worktrees). The explorer root lists checkouts grouped by repo instead of raw
+// folders, filtered by view: the working set (a coding agent runs there, or it
+// was added with `px0 set add`), checkouts with changes, or all of them.
+import { $, S, esc, api } from './state.js';
+
+S.repos = [];
+S.scope = new URLSearchParams(location.search).get('scope') || '';
+S.wsView = (() => { try { return localStorage.getItem('px0.wsView') || 'set'; } catch { return 'set'; } })();
+
+export const isWorkspace = () => !!S.meta?.workspace;
+
+// The checkout that owns path: the longest checkout prefix, or ''.
+export function repoOf(path) {
+  let best = '';
+  for (const r of S.repos) {
+    if ((path === r.path || path.startsWith(r.path + '/')) && r.path.length > best.length) best = r.path;
+  }
+  return best;
+}
+
+// The checkout whole-repo actions apply to: the scoped one, else the one
+// owning the active tab.
+export function activeRepo() {
+  const d = S.tabs[S.active];
+  return S.scope || repoOf(d?.path || '');
+}
+
+export const repoState = path => S.repos.find(r => r.path === path) || null;
+
+export const repoQuery = () => (isWorkspace() ? { repo: activeRepo() } : {});
+
+// For JSON posts, whose params travel in the body: the repo goes on the path.
+export const withRepo = path => {
+  const r = isWorkspace() ? activeRepo() : '';
+  return r ? path + (path.includes('?') ? '&' : '?') + 'repo=' + encodeURIComponent(r) : path;
+};
+
+let sig = '';
+let redraw = null; // tree.js hands its refresh in, to avoid an import cycle
+const listeners = [];
+export function setRedraw(fn) { redraw = fn; }
+export function onScopeChange(fn) { listeners.push(fn); }
+
+export async function loadRepos() {
+  if (!isWorkspace()) return;
+  try { onRepos((await api('/api/repos')).repos); } catch {}
+}
+
+export function onRepos(repos) {
+  if (!repos) return;
+  S.repos = repos;
+  const next = JSON.stringify(repos.map(r => [r.path, r.branch, r.head, r.changes, r.ahead, r.agent, r.inSet, r.note]));
+  if (next !== sig) {
+    sig = next;
+    if (!S.scope) redraw?.();
+    renderScopeBar();
+  }
+}
+
+export function setView(v) {
+  S.wsView = v;
+  try { localStorage.setItem('px0.wsView', v); } catch {}
+}
+
+export function setScope(prefix) {
+  S.scope = prefix || '';
+  const u = new URL(location.href);
+  if (S.scope) u.searchParams.set('scope', S.scope); else u.searchParams.delete('scope');
+  history.replaceState(null, '', u);
+  renderScopeBar();
+  redraw?.();
+  for (const fn of listeners) fn(S.scope);
+}
+
+function visible(r) {
+  const busy = r.changes > 0 || r.ahead > 0;
+  if (S.wsView === 'all') return true;
+  if (S.wsView === 'changes') return busy;
+  // An empty working set falls back to checkouts with uncommitted changes:
+  // "ahead" alone is too common (branches tracking their own remote copy).
+  const anySet = S.repos.some(x => x.agent || x.inSet);
+  return anySet ? (r.agent || r.inSet) : r.changes > 0;
+}
+
+// Under its group, a worktree drops the repeated group name ("sontaran-x" -> "x").
+function label(r) {
+  if (r.main) return r.path.split('/').pop();
+  const g = (r.group || '').split('/').pop();
+  const name = r.path.split('/').pop();
+  return g && name.startsWith(g + '-') ? name.slice(g.length + 1) : name;
+}
+
+function checkoutRow(r, depth) {
+  const pad = 8 + depth * 12;
+  const ref = r.branch && r.branch !== 'HEAD' ? r.branch : (r.head ? '@' + r.head : '');
+  const marks =
+    (r.agent ? '<span class="ws-agent" title="A coding agent is working here">agent</span>' : '') +
+    (r.changes ? '<span class="ws-n" title="Uncommitted changes">' + r.changes + '</span>' : '') +
+    (r.ahead ? '<span class="ws-up" title="Commits not pushed">↑' + r.ahead + '</span>' : '');
+  const dirty = r.changes ? ' dirty' : '';
+  const title = r.path + (ref ? ' · ' + ref : '') + (r.note ? ' — ' + r.note : '');
+  return '<div class="tw"><div class="tr dir ws-co' + dirty + '" data-dir="' + esc(r.path) + '" style="padding-left:' + pad + 'px" title="' + esc(title) + '">' +
+    '<span class="ar"></span><span class="nm">' + esc(label(r)) + '</span>' +
+    '<span class="ws-br">' + esc(ref) + '</span>' +
+    (r.note ? '<span class="ws-note">' + esc(r.note) + '</span>' : '') + marks +
+    '<button class="ws-focus" data-focus="' + esc(r.path) + '" title="Scope px0 to this checkout" aria-label="Scope to this checkout"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/></svg></button></div>' +
+    '<div class="kids" data-kids="' + esc(r.path) + '"></div></div>';
+}
+
+export async function drawWorkspaceRoot(container) {
+  const shown = S.repos.filter(visible);
+  const groups = new Map();
+  for (const r of shown) {
+    const g = r.main ? r.path : (r.group || r.path);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(r);
+  }
+  let html = '';
+  for (const [g, list] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    list.sort((a, b) => (b.main - a.main) || a.path.localeCompare(b.path));
+    const main = list.find(r => r.path === g);
+    if (main) html += checkoutRow(main, 0);
+    else html += '<div class="ws-group" title="' + esc(g) + '">' + esc(g.split('/').pop()) + '</div>';
+    for (const r of list) if (r !== main) html += checkoutRow(r, 1);
+  }
+  if (S.wsView === 'all') {
+    let j;
+    try { j = await api('/api/tree', { dir: '' }); } catch { j = { children: [] }; }
+    const isCheckout = p => S.repos.some(r => r.path === p);
+    const others = (j.children || []).filter(c => c.dir && !c.ignored && !isCheckout(c.path));
+    if (others.length) {
+      html += '<div class="ws-group">Other folders</div>' + others.map(c =>
+        '<div class="tw"><div class="tr dir" data-dir="' + esc(c.path) + '" style="padding-left:8px" title="Folder: ' + esc(c.path) + '"><span class="ar"></span><span class="nm">' + esc(c.name) + '</span></div><div class="kids" data-kids="' + esc(c.path) + '"></div></div>').join('');
+    }
+  }
+  if (!html) {
+    html = '<div class="ws-empty">' + (S.wsView === 'set'
+      ? 'No agent is working and nothing has been added. Add a checkout with <code>px0 set add</code>.'
+      : 'No checkouts with changes.') + '</div>';
+  }
+  container.innerHTML = html;
+}
+
+export function renderScopeBar() {
+  const el = $('#ws-scope');
+  if (!el) return;
+  el.hidden = !isWorkspace() || !S.scope;
+  if (el.hidden) return;
+  const r = repoState(S.scope);
+  const ref = r ? (r.branch && r.branch !== 'HEAD' ? r.branch : (r.head ? '@' + r.head : '')) : '';
+  el.innerHTML = '<span class="ws-scope-name" title="' + esc(S.scope) + '">' + esc(S.scope) + '</span>' +
+    (ref ? '<span class="ws-br">' + esc(ref) + '</span>' : '') +
+    '<button id="ws-unscope" title="Back to all checkouts" aria-label="Back to all checkouts">✕</button>';
+}
+
+export function initWorkspace() {
+  $('#ws-scope')?.addEventListener('click', e => {
+    if (e.target.closest('#ws-unscope')) setScope('');
+  });
+}
