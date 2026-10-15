@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { visibleCheckouts, rootKey, commitKey } from './workspace-view.js';
+import { visibleCheckouts, rootKey, commitKey, groupTabs } from './workspace-view.js';
 
 const repo = (path, extra = {}) => ({ path, group: path, main: true, branch: 'main', head: 'abc', changes: 0, ahead: 0, ...extra });
 
@@ -32,4 +32,14 @@ test('root key changes when the listed checkouts change', () => {
 
 test('commit cache key names the checkout', () => {
   assert.notEqual(commitKey('sontaran', 'abc'), commitKey('sontaran-x', 'abc'));
+});
+
+test('tabs group by checkout in order of first appearance, keeping their indexes', () => {
+  const owner = p => p.split('/')[0] === 'docs' ? '' : p.split('/')[0];
+  const groups = groupTabs(['a/x.go', 'b/y.go', 'a/z.go', 'docs/n.md', 'b/w.go'], owner);
+  assert.deepEqual(groups, [
+    { repo: 'a', tabs: [0, 2] },
+    { repo: 'b', tabs: [1, 4] },
+    { repo: '', tabs: [3] },
+  ]);
 });

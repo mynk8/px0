@@ -5,6 +5,7 @@
 // was added with `px0 set add`), checkouts with changes, or all of them.
 import { $, S, esc, api } from './state.js';
 import { visibleCheckouts, rootKey } from './workspace-view.js';
+import { emit } from './bus.js';
 
 S.repos = [];
 S.scope = new URLSearchParams(location.search).get('scope') || '';
@@ -53,6 +54,7 @@ export function onRepos(repos) {
   if (!repos) return;
   S.repos = repos;
   renderScopeBar();
+  emit('repos:changed', {}); // tab groups take their names and colours from here
   if (S.scope) return;
   const next = rootKey(repos, S.wsView);
   if (next !== layoutKey) redraw?.(); // drawWorkspaceRoot records the new key
@@ -99,12 +101,14 @@ function label(r) {
   return g && name.startsWith(g + '-') ? name.slice(g.length + 1) : name;
 }
 
-// One theme colour per repo, so a repo's worktrees read as a family.
-const REPO_HUES = ['--k', '--kt', '--nc', '--nt', '--m', '--s', '--cp', '--o', '--nf', '--err'];
-function repoHue(group) {
-  let h = 0;
-  for (const ch of group || '') h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return 'var(' + REPO_HUES[h % REPO_HUES.length] + ')';
+// One theme colour per repo, so a repo's worktrees read as a family. Repos
+// take colours in alphabetical turn rather than by hash, so neighbours never
+// share one; the same mapping colours explorer dots and tab groups.
+const REPO_HUES = ['--k', '--kt', '--nc', '--s', '--m', '--err', '--nf', '--nt', '--o'];
+export function repoHue(group) {
+  const groups = [...new Set(S.repos.map(r => (r.main ? r.path : r.group) || r.path))].sort();
+  const i = Math.max(0, groups.indexOf(group));
+  return 'var(' + REPO_HUES[i % REPO_HUES.length] + ')';
 }
 
 function checkoutRow(r, depth) {

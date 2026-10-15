@@ -23,3 +23,16 @@ export function rootKey(repos, view) {
 // A commit's cached file list belongs to the checkout it was read from: two
 // worktrees of one repo share SHAs, but their file paths carry their own prefix.
 export const commitKey = (repo, sha) => (repo || '') + ':' + sha;
+
+// Tab groups: tabs of one checkout shown together, in the order each checkout
+// first appears. Tabs keep their real index; only the drawing order changes.
+export function groupTabs(paths, repoOf) {
+  const groups = [];
+  const at = new Map();
+  paths.forEach((p, i) => {
+    const repo = repoOf(p) || '';
+    if (!at.has(repo)) { at.set(repo, groups.length); groups.push({ repo, tabs: [] }); }
+    groups[at.get(repo)].tabs.push(i);
+  });
+  return groups;
+}

@@ -1,6 +1,8 @@
 // web/src/tabs.js
+import { isWorkspace, repoOf, repoState, repoHue } from './workspace.js';
+import { groupTabs } from './workspace-view.js';
 import { $, esc, S, doc_, api, apiPost, apiPostJson, LH, CHUNK, withKeys } from './state.js';
-import { emit } from './bus.js';
+import { emit, on } from './bus.js';
 import { vp, sizer, rowsEl, editor } from './ui.js';
 import { render, layout, refineChunk } from './renderer.js';
 import { updateStatus, setStatusNote, refreshMetrics } from './status.js';
@@ -468,15 +470,29 @@ async function stepCommitFile(from, file) {
   if (i >= 0 && from !== doc_() && from.diffRef === ref) closeTab(i);
 }
 
+// Workspace mode: tabs drawn grouped by checkout, behind a chip in the repo's
+// colour, each tab striped with it. Elsewhere one unlabelled group, as before.
+function tabGroupsHtml(tabHtml) {
+  if (!isWorkspace()) return S.tabs.map(tabHtml).join('');
+  return groupTabs(S.tabs.map(t => t.path || ''), repoOf).map(g => {
+    if (!g.repo) return g.tabs.map(i => tabHtml(S.tabs[i], i)).join('');
+    const st = repoState(g.repo);
+    const hue = repoHue(st ? (st.main ? st.path : st.group) : g.repo);
+    const ref = st ? (st.branch && st.branch !== 'HEAD' ? st.branch : '@' + st.head) : '';
+    return '<span class="tab-group" style="--g:' + hue + '" title="' + esc(g.repo + (ref ? ' · ' + ref : '')) + '">' + esc(g.repo.split('/').pop()) + '</span>' +
+      g.tabs.map(i => tabHtml(S.tabs[i], i).replace('<div class="tab', '<div style="--g:' + hue + '" class="tab grouped')).join('');
+  }).join('');
+}
+
 export function drawTabs() {
-  $('#tabs').innerHTML = S.tabs.map((t, i) =>
+  $('#tabs').innerHTML = tabGroupsHtml((t, i) =>
     '<div class="tab' + (i === S.active ? ' active' : '') + (t.isImage ? ' tab-image' : '') + (t.deleted ? ' tab-deleted' : '') + '" data-i="' + i +
     '" title="' + esc(t.path) + (t.diffRef ? ' — in commit ' + esc(t.diffRef.slice(0, 7)) : '') + '">' +
     (t.isImage ? '<svg class="tab-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><circle cx="5.5" cy="5.5" r="1.5"/><path d="M14 10l-3.5-3.5L3 14"/></svg>' : '') +
     '<span class="tn">' + esc(t.name) + '</span>' +
     // Pinned to a commit: the tab is not the working tree, and it should say so.
     (t.diffRef ? '<span class="tab-ref">@' + esc(t.diffRef.slice(0, 7)) + '</span>' : '') +
-    '<span class="x" data-close="' + i + '" title="' + withKeys('Close tab ({Alt+W})') + '"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></span></div>').join('');
+    '<span class="x" data-close="' + i + '" title="' + withKeys('Close tab ({Alt+W})') + '"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></span></div>');
   const act = $('#tabs .tab.active');
   if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
@@ -549,6 +565,7 @@ export function hideImage() {
 }
 
 export function initTabs() {
+  on('repos:changed', drawTabs);
   setSourceJumpHandler(jumpToSourceLine);
   setCommitStepHandler(stepCommitFile);
   tabMenu = document.createElement('div');
