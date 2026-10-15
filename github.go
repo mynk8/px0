@@ -20,7 +20,11 @@ import (
 // third-party SDKs: net/http plus a shell-out to the gh CLI as one of three
 // token sources, nothing more.
 
-const githubAPIBase = "https://api.github.com"
+// The GitHub endpoints: variables only so tests can point them at a fake.
+var (
+	githubAPIBase    = "https://api.github.com"
+	githubGraphQLURL = "https://api.github.com/graphql"
+)
 
 var githubHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
