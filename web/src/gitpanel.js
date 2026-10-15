@@ -3,6 +3,7 @@
 // a git repo (same gate as the diff-view toggle in status.js). In a PR
 // review session (S.meta.pr set), Push/Pull target the PR's actual head
 // branch instead of the checkout's own remote -- see pr.go's Push/Pull.
+import { isWorkspace, activeRepo, repoState, withRepo, onScopeChange } from './workspace.js';
 import { $, esc, S, api, apiPostJson } from './state.js';
 import { showToast, copyToClipboard, flashActionSuccess } from './ui.js';
 import { reindexWorkspace } from './panels.js';
@@ -96,7 +97,44 @@ function updateGitPanelVisibility() {
 // Called from gitstream.js's handleGitStatus with each SSE/refresh payload,
 // so the branch name and staged/changed counts stay live without a manual
 // reload.
+let lastPayload = null;
+
+// In workspace mode the panel shows the active checkout (the scoped one, else
+// the one owning the open file): its branch, counts and commits.
+function checkoutView(payload) {
+  const repo = activeRepo();
+  const st = repo ? repoState(repo) : null;
+  if (!st) return null;
+  const staged = {};
+  for (const p of Object.keys(payload?.staged || {})) if (p.startsWith(repo + '/')) staged[p] = true;
+  return { branch: repo + ' · ' + (st.branch && st.branch !== 'HEAD' ? st.branch : '@' + st.head), ahead: st.ahead, behind: st.behind, gitChanges: st.changes, staged, commitsUrl: payload?.commitsUrl };
+}
+
+// Re-render for a newly active checkout without waiting for the next stream event.
+export function refreshGitPanelForCheckout() {
+  if (!isWorkspace() || !lastPayload) return;
+  updateGitPanel(lastPayload);
+  fetchRecentCommits();
+}
+
 export function updateGitPanel(payload) {
+  if (payload) lastPayload = payload;
+  if (payload?.workspace) {
+    const view = checkoutView(payload);
+    if (!view) {
+      updateGitPanelVisibility();
+      const branchEl = $('#git-branch');
+      if (branchEl) { branchEl.textContent = 'Open a file in a checkout'; branchEl.title = ''; }
+      const countsEl = $('#git-counts');
+      if (countsEl) countsEl.textContent = '';
+      const commitSection = $('#git-commit-section');
+      if (commitSection) commitSection.hidden = true;
+      const cleanState = $('#git-clean-state');
+      if (cleanState) cleanState.hidden = true;
+      return;
+    }
+    payload = view;
+  }
   updateGitPanelVisibility();
   const branchEl = $('#git-branch');
   if (branchEl) {
@@ -183,7 +221,7 @@ async function doStageAll() {
     btn.textContent = 'Staging...';
   }
   try {
-    await apiPostJson('/api/git/stage', { path: '.' });
+    await apiPostJson(withRepo('/api/git/stage'), { path: '.' });
     await triggerRefresh();
     if (btn) {
       btn.textContent = prevText;
@@ -247,7 +285,7 @@ async function doCommit() {
     btn.textContent = 'Committing...';
   }
   try {
-    await apiPostJson('/api/git/commit', { message });
+    await apiPostJson(withRepo('/api/git/commit'), { message });
     if (ta) {
       ta.value = '';
       ta.classList.remove('warn-border');
@@ -277,7 +315,7 @@ async function doPush() {
     btn.textContent = 'Pushing...';
   }
   try {
-    await apiPostJson('/api/git/push', {});
+    await apiPostJson(withRepo('/api/git/push'), {});
     showToast('✓', S.meta?.pr ? `Pushed to PR #${S.meta.pr.number}` : 'Pushed');
     if (btn) {
       btn.textContent = 'Push';
@@ -307,7 +345,7 @@ async function doPull() {
     btn.textContent = 'Pulling...';
   }
   try {
-    const j = await apiPostJson('/api/git/pull', {});
+    const j = await apiPostJson(withRepo('/api/git/pull'), {});
     showToast('✓', j.message || 'Pulled');
     if (btn) {
       btn.textContent = 'Pull';
@@ -340,7 +378,7 @@ async function doCommitWithAI() {
 
   // Stage all changes
   try {
-    await apiPostJson('/api/git/stage', { path: '.' });
+    await apiPostJson(withRepo('/api/git/stage'), { path: '.' });
   } catch (e) {
     resetGenerateBtn(btn);
     showToast('!', e.message || 'Could not stage changes');
@@ -352,7 +390,7 @@ async function doCommitWithAI() {
   }
   let job;
   try {
-    job = await apiPostJson('/api/git/commit-message', {});
+    job = await apiPostJson(withRepo('/api/git/commit-message'), {});
   } catch (e) {
     resetGenerateBtn(btn);
     showToast('!', e.message || 'Could not start generation');
@@ -425,7 +463,7 @@ async function doGenerateMessage() {
   link.textContent = 'Writing message...';
   let job;
   try {
-    job = await apiPostJson('/api/git/commit-message', {});
+    job = await apiPostJson(withRepo('/api/git/commit-message'), {});
   } catch (e) {
     reset();
     showToast('!', e.message || 'Could not start generation');
@@ -445,7 +483,7 @@ async function doGenerateMessage() {
 async function commitWithMessage(message, btn) {
   if (btn) btn.textContent = 'Committing...';
   try {
-    await apiPostJson('/api/git/commit', { message });
+    await apiPostJson(withRepo('/api/git/commit'), { message });
     const ta = $('#git-commit-msg');
     if (ta) {
       ta.value = '';
@@ -480,7 +518,7 @@ function cleanCommitMessage(text) {
 export async function fetchRecentCommits() {
   if (!S.meta?.git) return;
   try {
-    const res = await api('/api/git/log?limit=5');
+    const res = await api(withRepo('/api/git/log?limit=5'));
     if (res?.commits) {
       renderRecentCommits(res.commits);
       updateSeeAllCommits(res.commitsUrl, res.commits.length);
@@ -520,7 +558,7 @@ async function handleSeeAllCommits(e) {
   if (currentCommitsUrl) return; // Follow standard hyperlink
   e.preventDefault();
   try {
-    const res = await api('/api/git/log?limit=50');
+    const res = await api(withRepo('/api/git/log?limit=50'));
     if (res?.commits) {
       renderRecentCommits(res.commits, 0);
       const link = $('#git-see-all-commits');
@@ -728,4 +766,16 @@ function initCommitList() {
     e.preventDefault();
   });
   on('tab:activated', markActiveCommitFile);
+  // Workspace mode: the panel follows the checkout of the open file or scope.
+  let shownRepo = '';
+  const followCheckout = () => {
+    if (!isWorkspace()) return;
+    const r = activeRepo();
+    if (r === shownRepo) return;
+    shownRepo = r;
+    refreshGitPanelForCheckout();
+    refreshUnpushed();
+  };
+  on('tab:activated', followCheckout);
+  onScopeChange(followCheckout);
 }

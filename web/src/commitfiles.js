@@ -4,6 +4,7 @@
 // rules. Rows are built COMMIT_FILES_PAGE at a time behind a "Show N more" row,
 // so a commit of thousands of files costs no more DOM than one of a hundred
 // until someone asks for more.
+import { activeRepo, repoQuery } from './workspace.js';
 import { esc, api } from './state.js';
 
 export const COMMIT_FILES_PAGE = 100;
@@ -12,18 +13,23 @@ const fileLists = new Map(); // SHA -> CommitFile[] once loaded, or the pending 
 
 // A commit's files never change, so each list is fetched once and shared by the
 // sidebar rows and the diff strip.
+// Keyed by checkout too: in workspace mode two repos can share no SHA in
+// practice, but the request must name the repo the commit lives in.
+const cacheKey = sha => activeRepo() + ':' + sha;
+
 export function loadCommitFiles(sha) {
-  const have = fileLists.get(sha);
+  const key = cacheKey(sha);
+  const have = fileLists.get(key);
   if (have) return Promise.resolve(have);
-  const req = api('/api/commitfiles', { sha }).then(
-    j => { const files = j.files || []; fileLists.set(sha, files); return files; },
-    e => { fileLists.delete(sha); throw e; });
-  fileLists.set(sha, req);
+  const req = api('/api/commitfiles', { sha, ...repoQuery() }).then(
+    j => { const files = j.files || []; fileLists.set(key, files); return files; },
+    e => { fileLists.delete(key); throw e; });
+  fileLists.set(key, req);
   return req;
 }
 
 export function cachedCommitFiles(sha) {
-  const have = fileLists.get(sha);
+  const have = fileLists.get(cacheKey(sha));
   return Array.isArray(have) ? have : null;
 }
 

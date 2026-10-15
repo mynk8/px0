@@ -618,7 +618,7 @@ async function thrSend() {
   thrEl.send.disabled = true;
   try {
     if (thr.draft) {
-      const t = await apiPostJson('/api/threads/create', { ...thr.draft, message });
+      const t = await apiPostJson('/api/threads/create', { ...thr.draft, message, checkout: S.scope || '' });
       thr.draft = null;
       thr.cur = t;
       thrOpenStream(t.id);

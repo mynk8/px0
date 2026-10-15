@@ -13,6 +13,7 @@
 // show. No upstream configured means no section at all -- there is no guessed
 // fallback branch, since a list measured against the wrong ref is worse than
 // no list.
+import { isWorkspace, activeRepo, repoState, repoQuery } from './workspace.js';
 import { $, S, esc, api } from './state.js';
 import { on } from './bus.js';
 import { openFile } from './tabs.js';
@@ -53,8 +54,17 @@ export function syncUnpushedVisibility() {
    on every heartbeat. Call with nothing to force a refetch. */
 export async function refreshUnpushed(payload) {
   if (!S.meta?.git) return;
+  if (isWorkspace() && !activeRepo()) {
+    upList = [];
+    S.unpushedCount = 0;
+    drawUnpushed();
+    syncUnpushedVisibility();
+    return;
+  }
   if (payload) {
-    const next = (payload.ahead ?? 0) + ':' + (payload.recentCommits?.[0]?.hash || '');
+    const st = isWorkspace() ? repoState(activeRepo()) : null;
+    const next = st ? activeRepo() + ':' + st.ahead + ':' + st.head
+      : (payload.ahead ?? 0) + ':' + (payload.recentCommits?.[0]?.hash || '');
     if (next === upSig) return;
     upSig = next;
   } else {
@@ -63,7 +73,7 @@ export async function refreshUnpushed(payload) {
 
   let j;
   try {
-    j = await api('/api/unpushed');
+    j = await api('/api/unpushed', repoQuery());
   } catch {
     return; // no upstream, no git, no section -- never a toast
   }
@@ -124,7 +134,7 @@ async function toggleUnpushedCommit(sha) {
   drawUnpushed();
   if (!upOpenSha || upFiles.has(sha)) return;
   try {
-    const j = await api('/api/commitfiles', { sha });
+    const j = await api('/api/commitfiles', { sha, ...repoQuery() });
     upFiles.set(sha, j.files || []);
   } catch {
     upFiles.set(sha, []);
@@ -158,7 +168,7 @@ async function showCommitCard(sha, x, y) {
 
   let d = upDetails.get(sha);
   if (!d) {
-    try { d = await api('/api/commitdetail', { sha }); } catch { return; }
+    try { d = await api('/api/commitdetail', { sha, ...repoQuery() }); } catch { return; }
     upDetails.set(sha, d);
   }
   if (seq !== upCardSeq) return;
