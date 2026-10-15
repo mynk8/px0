@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -91,5 +92,47 @@ func TestWorkspaceOffForSingleRepo(t *testing.T) {
 	ix.Build()
 	if ix.Workspace() {
 		t.Fatal("a single repo must not turn on workspace mode")
+	}
+}
+
+func TestWorkspaceStatusMerged(t *testing.T) {
+	root := workspaceFixture(t)
+	os.WriteFile(filepath.Join(root, "alpha/a.go"), []byte("two\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "beta/new.go"), []byte("n\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "alpha-wt/sub/s.go"), []byte("changed\n"), 0o644)
+	// A repo nested in a checkout: the outer porcelain lists it as "inner/".
+	os.MkdirAll(filepath.Join(root, "beta/inner"), 0o755)
+	os.WriteFile(filepath.Join(root, "beta/inner/i.go"), []byte("i\n"), 0o644)
+	gitTestRun(t, filepath.Join(root, "beta/inner"), "init", "-q")
+
+	ix := NewIndex(root)
+	ix.Build()
+	st := ix.GitStatusMap()
+	want := map[string]string{"alpha/a.go": "M", "beta/new.go": "U", "alpha-wt/sub/s.go": "M", "beta/inner/i.go": "U"}
+	for k, v := range want {
+		if st[k] != v {
+			t.Errorf("status[%q] = %q, want %q (all: %v)", k, st[k], v, st)
+		}
+	}
+	for k := range st {
+		if strings.HasSuffix(k, "/") {
+			t.Errorf("directory key leaked into status: %q", k)
+		}
+	}
+	kids, _ := ix.Children("")
+	for _, k := range kids {
+		if (k.Name == "alpha" || k.Name == "alpha-wt") && !k.Dirty {
+			t.Errorf("%s should be dirty", k.Name)
+		}
+	}
+	if ch, _ := ix.CheckoutCounts("alpha"); ch != 1 {
+		t.Errorf("CheckoutCounts(alpha) = %d, want 1", ch)
+	}
+	// Refreshing one checkout keeps the others' cached status.
+	os.WriteFile(filepath.Join(root, "beta/b.go"), []byte("bb\n"), 0o644)
+	ix.UpdateGitStatusFor([]string{"beta"})
+	st = ix.GitStatusMap()
+	if st["beta/b.go"] != "M" || st["alpha/a.go"] != "M" {
+		t.Errorf("after partial refresh: %v", st)
 	}
 }

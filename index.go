@@ -502,6 +502,10 @@ func (ix *Index) Build() {
 		close(ix.readyCh)
 	}
 	ix.mu.Unlock()
+
+	if ix.Workspace() {
+		ix.UpdateGitStatus() // badges arrive now that checkouts are known
+	}
 }
 
 // injectDeletedNodes ensures that files marked deleted in git status (which do not
@@ -625,16 +629,30 @@ func cleanupEmptyDirs(children map[string][]Node, root string) {
 // anything changed (status, staged, or yourStatus), and the raw status/staged/dirty-dir
 // maps.
 func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, statuses map[string]string, dirtyDirs map[string]bool, staged map[string]bool, yourStatuses map[string]string, yourDirtyDirs map[string]bool) {
-	if !ix.Ready() || gitDisabled || !gitAvailable(ix.root) {
+	return ix.UpdateGitStatusFor(nil)
+}
+
+// UpdateGitStatusFor is UpdateGitStatus that, in workspace mode, re-runs git
+// status only for the named checkouts (nil: all) and reuses the cached status
+// of the rest. Outside workspace mode prefixes are ignored.
+func (ix *Index) UpdateGitStatusFor(prefixes []string) (count int, files []string, changed bool, statuses map[string]string, dirtyDirs map[string]bool, staged map[string]bool, yourStatuses map[string]string, yourDirtyDirs map[string]bool) {
+	if !ix.Ready() || gitDisabled || !ix.GitOn() {
 		return 0, nil, false, nil, nil, nil, nil, nil
 	}
 
-	base := ix.DiffBase()
-	gs := gitStatusAgainst(ix.root, base)
+	var gs map[string]string
+	var sg map[string]bool
+	if ix.Workspace() {
+		ix.refreshCheckouts(prefixes)
+		gs, sg = ix.mergedStatus()
+	} else {
+		base := ix.DiffBase()
+		gs = gitStatusAgainst(ix.root, base)
+		sg = gitStagedPaths(ix.root)
+	}
 	if gs == nil {
 		gs = map[string]string{}
 	}
-	sg := gitStagedPaths(ix.root)
 	if sg == nil {
 		sg = map[string]bool{}
 	}

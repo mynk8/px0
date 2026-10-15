@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -106,3 +107,94 @@ func (ix *Index) CheckoutByPrefix(p string) (checkout, bool) {
 	}
 	return checkout{}, false
 }
+
+// refreshCheckouts re-runs git status for the given checkouts (nil: all) in
+// parallel and stores each result under its prefix, repo-relative.
+func (ix *Index) refreshCheckouts(prefixes []string) {
+	cos := ix.Checkouts()
+	if prefixes != nil {
+		want := map[string]bool{}
+		for _, p := range prefixes {
+			want[p] = true
+		}
+		kept := cos[:0]
+		for _, c := range cos {
+			if want[c.Prefix] {
+				kept = append(kept, c)
+			}
+		}
+		cos = kept
+	}
+	type result struct {
+		gs map[string]string
+		sg map[string]bool
+	}
+	out := make([]result, len(cos))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.NumCPU())
+	for i, c := range cos {
+		wg.Add(1)
+		go func(i int, c checkout) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ix.resolveRepoBase(c)
+			out[i] = result{gitStatusAgainst(c.Abs, ix.RepoBase(c.Prefix)), gitStagedPaths(c.Abs)}
+		}(i, c)
+	}
+	wg.Wait()
+	ix.mu.Lock()
+	if ix.repoGS == nil {
+		ix.repoGS, ix.repoSG = map[string]map[string]string{}, map[string]map[string]bool{}
+	}
+	for i, c := range cos {
+		ix.repoGS[c.Prefix], ix.repoSG[c.Prefix] = out[i].gs, out[i].sg
+	}
+	ix.mu.Unlock()
+}
+
+// mergedStatus prefixes every checkout's status with its folder. A nested
+// repo shows up in its parent's porcelain as an untracked "dir/": dropped.
+func (ix *Index) mergedStatus() (map[string]string, map[string]bool) {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	gs, sg := map[string]string{}, map[string]bool{}
+	for _, c := range ix.checkouts {
+		for k, v := range ix.repoGS[c.Prefix] {
+			if !strings.HasSuffix(k, "/") {
+				gs[c.Prefix+"/"+k] = v
+			}
+		}
+		for k, v := range ix.repoSG[c.Prefix] {
+			sg[c.Prefix+"/"+k] = v
+		}
+	}
+	return gs, sg
+}
+
+// RepoBase is the ref a checkout's status and diffs are measured against:
+// HEAD, or in "This branch" mode the merge base with its parent branch.
+func (ix *Index) RepoBase(prefix string) string {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	if b := ix.repoBase[prefix]; b != "" {
+		return b
+	}
+	return "HEAD"
+}
+
+// CheckoutCounts returns a checkout's changed and staged file counts from the
+// last refresh.
+func (ix *Index) CheckoutCounts(prefix string) (changes, staged int) {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	for k := range ix.repoGS[prefix] {
+		if !strings.HasSuffix(k, "/") {
+			changes++
+		}
+	}
+	return changes, len(ix.repoSG[prefix])
+}
+
+// resolveRepoBase recomputes a checkout's base for its mode (Task 6).
+func (ix *Index) resolveRepoBase(c checkout) {}
