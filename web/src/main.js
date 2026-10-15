@@ -191,6 +191,7 @@ initPRScope();
             await loadRepos();
             renderScopeBar();
             await refreshTree();
+            initPR(); // the review UI follows checkouts only once they are known
           }
           if (!initialPath) {
             hasGitChanges = await applyGitSidebarState();

@@ -3,6 +3,7 @@
 // open the same actions menu as a right click on a selection, aimed at that
 // line: start a thread, edit inline, copy a reference, and (in a PR review
 // session's diff view) add a review comment.
+import { hasActivePR } from './pr.js';
 import { S, doc_ } from './state.js';
 import { getReviewHandler, openLineMenu, getSelectedRangeInfo } from './selbar.js';
 
@@ -48,7 +49,7 @@ function handleLineBtnClick(btn, sel) {
   // marked non-reviewable (diff.js's "Your changes" section, i.e. edits the
   // reviewer made locally since checkout) get a plain line instead: there is
   // nothing a submitted review could attach a comment to.
-  if (diffRow && diffRow.dataset.reviewable !== '0' && S.meta?.pr && getReviewHandler()) {
+  if (diffRow && diffRow.dataset.reviewable !== '0' && hasActivePR() && getReviewHandler()) {
     openLineMenu(diffLineInfo(diffRow, d.path), at.right + 4, at.top);
     return;
   }

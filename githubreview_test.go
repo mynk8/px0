@@ -209,6 +209,19 @@ func TestOpenPRIntoWorkspace(t *testing.T) {
 	if got := strings.TrimSpace(gitTestRun(t, c.Abs, "rev-parse", "HEAD")); got != prHead {
 		t.Fatalf("review checkout at %s, want the PR head %s", got, prHead)
 	}
+	// A review checkout sits at the PR head, so it opens in "This branch"
+	// mode: the PR's own changes are what there is to review.
+	if mode, _ := ix.RepoMode("alpha-review-pr5"); mode != "branch" {
+		t.Fatalf("review checkout mode = %q, want branch", mode)
+	}
+	if st := ix.GitStatusMap()["alpha-review-pr5/pr.go"]; st != "A" {
+		t.Fatalf("PR file status = %q, want A against the PR base", st)
+	}
+	// Switching back to Uncommitted sticks.
+	agentPost(t, s, "/api/git/base?repo=alpha-review-pr5&mode=head")
+	if mode, _ := ix.RepoMode("alpha-review-pr5"); mode != "head" {
+		t.Fatalf("explicit head mode lost: %q", mode)
+	}
 	if code, m := agentPostJSON(t, s, "/api/pr/open", map[string]string{"target": "https://github.com/o/x/pull/5"}); code != 200 || m["checkout"] != "alpha-review-pr5" {
 		t.Fatalf("second open must reuse: %d %v", code, m)
 	}

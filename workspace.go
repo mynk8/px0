@@ -231,10 +231,6 @@ func (ix *Index) SetRepoMode(prefix, mode string) {
 	if ix.repoMode == nil {
 		ix.repoMode = map[string]string{}
 	}
-	if mode == "head" {
-		delete(ix.repoMode, prefix)
-		return
-	}
 	ix.repoMode[prefix] = mode
 }
 
@@ -242,10 +238,16 @@ func (ix *Index) SetRepoMode(prefix, mode string) {
 func (ix *Index) RepoMode(prefix string) (mode, parent string) {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
-	if m := ix.repoMode[prefix]; m != "" {
-		return m, ix.repoParent[prefix]
+	m := ix.repoMode[prefix]
+	if m == "" && reviewCheckoutRe.MatchString(prefix) {
+		// A PR review checkout sits at the PR head: its own changes are
+		// what there is to review, so it starts in "This branch" mode.
+		m = "branch"
 	}
-	return "head", ""
+	if m == "" || m == "head" {
+		return "head", ""
+	}
+	return m, ix.repoParent[prefix]
 }
 
 func gitRefExists(root, ref string) bool {

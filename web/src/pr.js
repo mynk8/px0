@@ -15,6 +15,8 @@ import { openFile } from './tabs.js';
 import { refreshTree } from './tree.js';
 import { layout, render } from './renderer.js';
 import { openSettings } from './settings.js';
+import { isWorkspace, activeRepo, withRepo, onScopeChange, loadRepos, setScope } from './workspace.js';
+import { on } from './bus.js';
 
 let meta = null;      // this session's PR info: {number, title, base, head, writeAccess, readOnly}
 let comments = [];    // draft comments known to the server
@@ -25,10 +27,64 @@ const prBar = () => $('#pr-bar');
 const list = () => $('#pr-comment-list');
 
 export function initPR() {
-  if (!S.meta || !S.meta.pr) return;
-  meta = S.meta.pr;
-  document.body.classList.add('pr-mode');
+  if (S.meta?.pr) {
+    meta = S.meta.pr;
+    document.body.classList.add('pr-mode');
+    wirePRUI();
+    renderBar();
+    refreshComments();
+    refreshExistingComments();
+    return;
+  }
+  if (!isWorkspace() || followingCheckouts) return;
+  followingCheckouts = true;
+  // Workspace mode: the same review UI, for the active checkout's PR.
+  wirePRUI();
+  const follow = () => {
+    const repo = activeRepo();
+    if (repo !== prRepo) loadCheckoutPR(repo);
+  };
+  on('tab:activated', follow);
+  on('repos:changed', follow); // the checkout list can arrive after the first tab
+  onScopeChange(follow);
+  follow();
+}
 
+// True when the review UI has a PR to comment on (single-PR mode, or the
+// active checkout's PR in a workspace).
+export const hasActivePR = () => !!meta;
+
+let prRepo = null; // workspace mode: the checkout whose PR is shown ('' none)
+let followingCheckouts = false;
+
+async function loadCheckoutPR(repo) {
+  prRepo = repo;
+  let j = null;
+  if (repo) {
+    try { j = await api(withRepo('/api/pr/meta')); } catch { j = null; }
+  }
+  if (prRepo !== repo) return; // switched again while this was loading
+  closeAllComposers();
+  comments = []; issueComments = []; reviewComments = [];
+  meta = j;
+  document.body.classList.toggle('pr-mode', !!meta);
+  const panel = $('#pr-comments-panel');
+  if (!meta) {
+    if (prBar()) prBar().hidden = true;
+    if (panel) panel.hidden = true;
+    renderCommentsPanel();
+    return;
+  }
+  if (panel) panel.hidden = false;
+  renderBar();
+  await refreshComments();
+  await refreshExistingComments();
+}
+
+let prUIWired = false;
+function wirePRUI() {
+  if (prUIWired) return;
+  prUIWired = true;
   if (!SEL_MENU_ITEMS.some(item => item.sel === 'review-comment')) {
     SEL_MENU_ITEMS.push({ sel: 'review-comment', label: 'Add Review Comment', keys: 'Alt+R' });
   }
@@ -37,9 +93,6 @@ export function initPR() {
   injectFooterButton();
   wireBarButtons();
   wireCommentsPanel();
-  renderBar();
-  refreshComments();
-  refreshExistingComments();
 }
 
 // Re-fetches PR metadata and comments after an external change to the
@@ -49,10 +102,10 @@ export function initPR() {
 export async function refreshPRMeta() {
   if (!meta) return;
   try {
-    const j = await api('/api/pr/meta');
+    const j = await api(withRepo('/api/pr/meta'));
     const filesChanged = JSON.stringify(meta.files || []) !== JSON.stringify(j.files || []);
     meta = { ...meta, ...j };
-    S.meta.pr = meta; // the tree reads the PR's file set from here
+    if (!isWorkspace()) S.meta.pr = meta; // the tree reads the PR's file set from here
     renderBar();
     if (filesChanged) await refreshTree(); // rows carry a pr-file flag from that set
   } catch {
@@ -76,7 +129,7 @@ function fmtTime(iso) {
 // shows up on the next open of the panel or diff.
 async function refreshExistingComments() {
   try {
-    const j = await api('/api/pr/existing-comments');
+    const j = await api(withRepo('/api/pr/existing-comments'));
     issueComments = j.issueComments || [];
     reviewComments = j.reviewComments || [];
     renderCommentsPanel();
@@ -88,7 +141,7 @@ async function refreshExistingComments() {
 
 async function refreshComments() {
   try {
-    const j = await api('/api/pr/comments');
+    const j = await api(withRepo('/api/pr/comments'));
     comments = j.comments || [];
     renderBar();
     renderCommentsPanel();
@@ -138,6 +191,23 @@ function renderBar() {
   }
   const composeEl = $('#pr-issue-compose');
   if (composeEl) composeEl.hidden = false;
+  const rm = $('#pr-remove-checkout');
+  if (rm) rm.hidden = !(isWorkspace() && /-review-pr\d+$/.test(prRepo || ''));
+}
+
+// Workspace mode: delete a review checkout once the review is done. Asks
+// first; git refuses (and px0 says so) when the checkout has changes.
+async function removeReviewCheckout() {
+  const repo = prRepo;
+  if (!repo || !confirm('Remove the review checkout ' + repo + '?\n\nThis runs git worktree remove. A checkout with changes is kept.')) return;
+  try {
+    await apiPostJson(withRepo('/api/pr/close-checkout'), {});
+    setScope('');
+    await loadRepos();
+    showToast('✓', 'Removed ' + repo);
+  } catch (e) {
+    showToast('!', e.message || 'Could not remove the review checkout');
+  }
 }
 
 export function nudgeGitHubToken() {
@@ -152,6 +222,7 @@ function wireBarButtons() {
   $('#pr-submit-approve')?.addEventListener('click', () => submitReview('APPROVE'));
   $('#pr-issue-compose-send')?.addEventListener('click', sendNewIssueComment);
   $('#pr-readonly-note')?.addEventListener('click', nudgeGitHubToken);
+  $('#pr-remove-checkout')?.addEventListener('click', removeReviewCheckout);
 }
 
 async function sendNewIssueComment() {
@@ -166,7 +237,7 @@ async function sendNewIssueComment() {
   const btn = $('#pr-issue-compose-send');
   if (btn) btn.disabled = true;
   try {
-    const c = await apiPostJson('/api/pr/comments/issue', { body });
+    const c = await apiPostJson(withRepo('/api/pr/comments/issue'), { body });
     issueComments.push(c);
     ta.value = '';
     expandedKeys.add('issue:' + c.id);
@@ -262,7 +333,7 @@ async function submitReview(event) {
     return;
   }
   try {
-    await apiPostJson('/api/pr/submit', { event, body });
+    await apiPostJson(withRepo('/api/pr/submit'), { event, body });
     comments = [];
     if (bodyEl) bodyEl.value = '';
     closeAllComposers();
@@ -423,7 +494,7 @@ export function openCommentComposer(info) {
     const errEl = /** @type {HTMLElement|null} */ (box.querySelector('.agent-err'));
     if (errEl) errEl.hidden = true;
     try {
-      const c = await apiPostJson('/api/pr/comments', { path: info.path, line, side, body });
+      const c = await apiPostJson(withRepo('/api/pr/comments'), { path: info.path, line, side, body });
       comments.push(c);
       expandedKeys.add('thread:' + threadKey(info.path, side, line));
       close();
@@ -622,7 +693,7 @@ async function sendThreadReply(row) {
   const btn = row.querySelector('.reply-send');
   if (btn) btn.disabled = true;
   try {
-    const c = await apiPostJson('/api/pr/comments/review-reply', { commentId, body });
+    const c = await apiPostJson(withRepo('/api/pr/comments/review-reply'), { commentId, body });
     reviewComments.push(c);
     renderCommentsPanel();
     renderMarkersForActiveDoc();
@@ -636,7 +707,7 @@ async function sendThreadReply(row) {
 
 async function deleteDraft(id) {
   try {
-    await apiPostJson('/api/pr/comments/delete?id=' + id, {});
+    await apiPostJson(withRepo('/api/pr/comments/delete?id=' + id), {});
     comments = comments.filter(c => c.id !== id);
     renderBar();
     renderCommentsPanel();
@@ -792,6 +863,18 @@ function renderCommentsPanel() {
 // invocation does. A failed checkout only ever shows in that child's own
 // terminal, not here -- see docs/internals/github-pr-review.md.
 export async function launchPR(target) {
+  if (isWorkspace()) {
+    // Open it here, as a review checkout beside its repo.
+    try {
+      const j = await apiPostJson('/api/pr/open', { target });
+      await loadRepos();
+      setScope(j.checkout);
+      showToast('✓', 'Opened ' + j.checkout);
+    } catch (e) {
+      showToast('!', e.message || 'Could not open the pull request');
+    }
+    return;
+  }
   try {
     await apiPostJson('/api/pr/launch', { target });
     showToast('✓', 'Opening PR in a new tab…');
