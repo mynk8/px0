@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -196,8 +197,100 @@ func (ix *Index) CheckoutCounts(prefix string) (changes, staged int) {
 	return changes, len(ix.repoSG[prefix])
 }
 
-// resolveRepoBase recomputes a checkout's base for its mode (Task 6).
-func (ix *Index) resolveRepoBase(c checkout) {}
+// resolveRepoBase recomputes a checkout's base for its mode: in "branch" mode
+// the merge base of HEAD and the parent branch, so the base follows HEAD as
+// commits land and stays right when the stack is not restacked.
+func (ix *Index) resolveRepoBase(c checkout) {
+	mode, _ := ix.RepoMode(c.Prefix)
+	base, parent := "", ""
+	if mode == "branch" {
+		parent = parentRef(c.Abs, gitCurrentBranch(c.Abs))
+		if parent != "" {
+			base = gitMergeBase(c.Abs, parent, "HEAD")
+		}
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.repoBase == nil {
+		ix.repoBase, ix.repoParent = map[string]string{}, map[string]string{}
+	}
+	if base == "" {
+		delete(ix.repoBase, c.Prefix)
+		delete(ix.repoParent, c.Prefix)
+		return
+	}
+	ix.repoBase[c.Prefix], ix.repoParent[c.Prefix] = base, parent
+}
+
+// SetRepoMode picks what a checkout is compared against: "head" (uncommitted
+// changes) or "branch" (everything since its parent branch).
+func (ix *Index) SetRepoMode(prefix, mode string) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.repoMode == nil {
+		ix.repoMode = map[string]string{}
+	}
+	if mode == "head" {
+		delete(ix.repoMode, prefix)
+		return
+	}
+	ix.repoMode[prefix] = mode
+}
+
+// RepoMode returns a checkout's mode and, in "branch" mode, its parent ref.
+func (ix *Index) RepoMode(prefix string) (mode, parent string) {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	if m := ix.repoMode[prefix]; m != "" {
+		return m, ix.repoParent[prefix]
+	}
+	return "head", ""
+}
+
+func gitRefExists(root, ref string) bool {
+	return exec.Command("git", "-C", root, "rev-parse", "--verify", "-q", ref).Run() == nil
+}
+
+// trunkRef is the repo's default branch: the remote's HEAD (upstream before
+// origin), else the first common trunk name that exists.
+func trunkRef(root string) string {
+	for _, remote := range []string{"upstream", "origin"} {
+		if out, err := exec.Command("git", "-C", root, "symbolic-ref", "-q", "--short", "refs/remotes/"+remote+"/HEAD").Output(); err == nil {
+			if r := strings.TrimSpace(string(out)); r != "" {
+				return r
+			}
+		}
+	}
+	for _, r := range []string{"upstream/dev", "upstream/main", "origin/dev", "origin/main", "origin/master", "dev", "main", "master"} {
+		if gitRefExists(root, r) {
+			return r
+		}
+	}
+	return ""
+}
+
+// parentRef is the branch a stack layer is measured against: the feature
+// branch it tracks (rule 1), else trunk (rule 3). The nearest-ancestor rule
+// is deferred.
+func parentRef(root, branch string) string {
+	trunk := trunkRef(root)
+	trunkName := trunk[strings.LastIndexByte(trunk, '/')+1:]
+	cfg := func(key string) string {
+		out, _ := exec.Command("git", "-C", root, "config", "--get", key).Output()
+		return strings.TrimSpace(string(out))
+	}
+	if merge := strings.TrimPrefix(cfg("branch."+branch+".merge"), "refs/heads/"); merge != "" && merge != branch && merge != trunkName {
+		remote := cfg("branch." + branch + ".remote")
+		ref := merge
+		if remote != "" && remote != "." {
+			ref = remote + "/" + merge
+		}
+		if gitRefExists(root, ref) {
+			return ref
+		}
+	}
+	return trunk
+}
 
 // RepoState is one checkout as the explorer and git panel show it.
 type RepoState struct {

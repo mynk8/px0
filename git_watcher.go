@@ -340,6 +340,7 @@ func (gw *GitWatcher) updateStates(prefixes []string) bool {
 	}
 	for p, st := range next {
 		st.Changes, st.Staged = gw.ix.CheckoutCounts(p)
+		st.Mode, st.Parent = gw.ix.RepoMode(p)
 		next[p] = st
 		if gw.states[p] != st {
 			changed = true

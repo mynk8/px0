@@ -141,6 +141,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/git/pull"), s.handleGitPull)
 	s.mux.HandleFunc(s.routePath("/api/git/log"), s.handleGitLog)
 	s.mux.HandleFunc(s.routePath("/api/repos"), s.handleRepos)
+	s.mux.HandleFunc(s.routePath("/api/git/base"), s.handleGitBase)
 	s.mux.HandleFunc(s.routePath("/api/unpushed"), s.handleUnpushed)
 	s.mux.HandleFunc(s.routePath("/api/commitfiles"), s.handleCommitFiles)
 	s.mux.HandleFunc(s.routePath("/api/commitdetail"), s.handleCommitDetail)
@@ -1527,6 +1528,43 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 		repos = append(repos, s.gitWatcher.RepoStates()...)
 	}
 	writeJSON(w, map[string]any{"repos": repos})
+}
+
+// handleGitBase switches what a checkout is compared against (POST
+// ?repo=&mode=head|branch). "branch" measures from the merge base with the
+// parent branch, so one stack layer shows only its own changes.
+func (s *Server) handleGitBase(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	if !s.ix.Workspace() {
+		fail(w, http.StatusBadRequest, "only in workspace mode")
+		return
+	}
+	_, prefix, ok := s.repoRoot(w, r)
+	if !ok {
+		return
+	}
+	mode := r.URL.Query().Get("mode")
+	if mode != "head" && mode != "branch" {
+		fail(w, http.StatusBadRequest, "mode is head or branch")
+		return
+	}
+	s.ix.SetRepoMode(prefix, mode)
+	c, _ := s.ix.CheckoutByPrefix(prefix)
+	s.ix.resolveRepoBase(c)
+	if mode == "branch" && s.ix.RepoBase(prefix) == "HEAD" {
+		s.ix.SetRepoMode(prefix, "head")
+		fail(w, http.StatusConflict, "no common ancestor with the parent branch")
+		return
+	}
+	if s.gitWatcher != nil {
+		s.gitWatcher.refreshFor([]string{prefix})
+	} else {
+		s.ix.UpdateGitStatusFor([]string{prefix})
+	}
+	_, parent := s.ix.RepoMode(prefix)
+	writeJSON(w, map[string]any{"ok": true, "base": s.ix.RepoBase(prefix), "parent": parent})
 }
 
 // repoRoot names the repo a whole-repo action runs in. A single-repo px0 has

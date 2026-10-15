@@ -62,12 +62,13 @@ type Index struct {
 	pushedHead       string // PR mode: remote branch tip as of the last push; bounds "unpushed"
 	readyCh          chan struct{}
 
-	workspace bool                         // root is not a repo but holds checkouts (workspace.go)
-	checkouts []checkout                   // sorted by Prefix
-	repoGS    map[string]map[string]string // checkout prefix -> repo-relative status
-	repoSG    map[string]map[string]bool   // checkout prefix -> repo-relative staged
-	repoMode  map[string]string            // checkout prefix -> "head" | "branch"
-	repoBase  map[string]string            // checkout prefix -> resolved diff base
+	workspace  bool                         // root is not a repo but holds checkouts (workspace.go)
+	checkouts  []checkout                   // sorted by Prefix
+	repoGS     map[string]map[string]string // checkout prefix -> repo-relative status
+	repoSG     map[string]map[string]bool   // checkout prefix -> repo-relative staged
+	repoMode   map[string]string            // checkout prefix -> "head" | "branch"
+	repoBase   map[string]string            // checkout prefix -> resolved diff base
+	repoParent map[string]string            // checkout prefix -> parent ref ("branch" mode)
 }
 
 // NewIndex constructs a new unpopulated workspace index for the given root directory.

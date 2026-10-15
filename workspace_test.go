@@ -254,3 +254,49 @@ func TestWorkspaceRepoStatesAndWatcher(t *testing.T) {
 		t.Fatalf("/api/repos = %v", m)
 	}
 }
+
+func TestWorkspaceThisBranchBase(t *testing.T) {
+	root := workspaceFixture(t)
+	wt := filepath.Join(root, "alpha-wt")
+	os.WriteFile(filepath.Join(wt, "feat.go"), []byte("f\n"), 0o644)
+	gitTestRun(t, wt, "add", "feat.go")
+	gitTestRun(t, wt, "commit", "-qm", "feat")
+	ix := NewIndex(root)
+	ix.Build()
+	s := NewServer(ix, nil)
+	// Committed on the branch: invisible against HEAD.
+	if ix.GitStatusMap()["alpha-wt/feat.go"] != "" {
+		t.Fatal("committed file should be clean against HEAD")
+	}
+	if code, m := agentPost(t, s, "/api/git/base?repo=alpha-wt&mode=branch"); code != 200 || m["parent"] != "main" {
+		t.Fatalf("base: %d %v", code, m)
+	}
+	if ix.GitStatusMap()["alpha-wt/feat.go"] != "A" {
+		t.Fatalf("this-branch status: %v", ix.GitStatusMap())
+	}
+	if _, m := get(t, s, "/api/diff?path=alpha-wt/feat.go"); m["available"] != true {
+		t.Fatalf("this-branch diff: %v", m)
+	}
+	if code, _ := agentPost(t, s, "/api/git/base?repo=alpha-wt&mode=sideways"); code != 400 {
+		t.Fatalf("bad mode: %d, want 400", code)
+	}
+	agentPost(t, s, "/api/git/base?repo=alpha-wt&mode=head")
+	if ix.GitStatusMap()["alpha-wt/feat.go"] != "" {
+		t.Fatal("back to HEAD should hide committed changes")
+	}
+}
+
+func TestParentRefTracksFeatureBranch(t *testing.T) {
+	root := workspaceFixture(t)
+	a := filepath.Join(root, "alpha")
+	gitTestRun(t, a, "branch", "base-feature")
+	gitTestRun(t, a, "branch", "child", "base-feature")
+	gitTestRun(t, a, "config", "branch.child.remote", ".")
+	gitTestRun(t, a, "config", "branch.child.merge", "refs/heads/base-feature")
+	if got := parentRef(a, "child"); got != "base-feature" {
+		t.Fatalf("parentRef = %q, want base-feature", got)
+	}
+	if got := parentRef(a, "feat"); got != "main" {
+		t.Fatalf("trunk fallback = %q, want main", got)
+	}
+}
