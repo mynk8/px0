@@ -84,6 +84,7 @@ type SearchOpts struct {
 	Case      bool   // Case-sensitive search (if false, uses fast ASCII case folding)
 	Word      bool   // Match whole words only (\b...\b)
 	Glob      string // Optional glob or path filter (e.g. "*.go" or "src/")
+	Scope     string // Optional checkout prefix: search only beneath it (workspace mode)
 	MaxFiles  int    // Maximum number of files to return hits from (defaults to 200)
 	MaxPerFil int    // Maximum number of matches per file (defaults to 50)
 	// classifyDefs marks hits whose line looks like a declaration of Query.
@@ -306,7 +307,7 @@ func SearchContext(ctx context.Context, ix *Index, o SearchOpts) ([]FileMatches,
 		return nil, false, err
 	}
 
-	files := ix.Files()
+	files := scopeFiles(ix.Files(), o.Scope)
 	root := ix.Root()
 	// Ignored files are never indexed, but find-in-file on an open one names it
 	// exactly. Search that one file rather than finding nothing.

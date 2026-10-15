@@ -1141,7 +1141,7 @@ func (s *Server) handleFind(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	res := FuzzyFind(s.ix.Files(), q, limit)
+	res := FuzzyFind(scopeFiles(s.ix.Files(), r.URL.Query().Get("scope")), q, limit)
 	if res == nil {
 		res = []FuzzyResult{}
 	}
@@ -1977,6 +1977,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Case:  q.Get("case") == "1",
 		Word:  q.Get("word") == "1",
 		Glob:  q.Get("glob"),
+		Scope: q.Get("scope"),
 	}
 	res, truncated, err := SearchContext(r.Context(), s.ix, opts)
 	if err != nil {

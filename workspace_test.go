@@ -378,3 +378,32 @@ func TestRepoStatesCarrySetAndNote(t *testing.T) {
 		}
 	}
 }
+
+func TestScopedFindAndSearch(t *testing.T) {
+	root := workspaceFixture(t)
+	ix := NewIndex(root)
+	ix.Build()
+	s := NewServer(ix, nil)
+	_, m := get(t, s, "/api/find?q=go&scope=beta")
+	res := m["results"].([]any)
+	if len(res) == 0 {
+		t.Fatal("scoped find found nothing in beta")
+	}
+	for _, r := range res {
+		if p := r.(map[string]any)["path"].(string); !strings.HasPrefix(p, "beta/") {
+			t.Fatalf("find leaked %s", p)
+		}
+	}
+	_, m = get(t, s, "/api/search?q=one&scope=alpha-wt")
+	for _, r := range m["results"].([]any) {
+		if p := r.(map[string]any)["path"].(string); !strings.HasPrefix(p, "alpha-wt/") {
+			t.Fatalf("search leaked %s", p)
+		}
+	}
+	if m["files"].(float64) == 0 {
+		t.Fatal("scoped search found nothing in alpha-wt/a.go")
+	}
+	if got := scopeFiles(ix.Files(), "alpha"); len(got) != 2 {
+		t.Fatalf("scopeFiles(alpha) = %v, want a.go and sub/s.go only", got)
+	}
+}

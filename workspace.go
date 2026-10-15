@@ -328,3 +328,14 @@ func repoIdentity(wsRoot string, c checkout) RepoState {
 	st.Ahead, st.Behind, _ = gitAheadBehind(c.Abs)
 	return st
 }
+
+// scopeFiles narrows the sorted file list to one checkout without copying.
+func scopeFiles(files []FileEntry, scope string) []FileEntry {
+	scope = strings.Trim(scope, "/")
+	if scope == "" {
+		return files
+	}
+	lo := sort.Search(len(files), func(i int) bool { return files[i].Path >= scope+"/" })
+	hi := sort.Search(len(files), func(i int) bool { return files[i].Path >= scope+"0" }) // '0' sorts right after '/'
+	return files[lo:hi]
+}
