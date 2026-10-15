@@ -100,7 +100,9 @@ func gitStatusAgainst(root, base string) map[string]string {
 	if !info.ok {
 		return nil
 	}
-	out, err := exec.Command("git", "-C", root, "status", "--porcelain=v2", "-z", "-uall").Output()
+	// --no-optional-locks: px0 only reads. A status that refreshes the index
+	// takes index.lock and makes a coding agent's own git add/commit fail.
+	out, err := exec.Command("git", "--no-optional-locks", "-C", root, "status", "--porcelain=v2", "-z", "-uall").Output()
 	if err != nil {
 		return nil
 	}

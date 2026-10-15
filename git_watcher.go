@@ -258,9 +258,6 @@ func (gw *GitWatcher) Refresh() GitStatusPayload {
 func (gw *GitWatcher) refreshFor(prefixes []string) GitStatusPayload {
 	count, files, changed, statuses, dirtyDirs, staged, yourStatuses, yourDirtyDirs := gw.ix.UpdateGitStatusFor(prefixes)
 	if gw.ix.Workspace() {
-		// git status refreshes a checkout's index file; re-stamp so the
-		// watcher does not take its own write for a CLI change.
-		gw.restamp(prefixes)
 		if gw.updateStates(prefixes) {
 			changed = true
 		}
@@ -509,23 +506,6 @@ func (gw *GitWatcher) statCheckout(c checkout) checkoutMeta {
 		}
 	}
 	return m
-}
-
-// restamp records the current metadata of the named checkouts (nil: all)
-// without reporting them as changed.
-func (gw *GitWatcher) restamp(prefixes []string) {
-	want := map[string]bool{}
-	for _, p := range prefixes {
-		want[p] = true
-	}
-	for _, c := range gw.ix.Checkouts() {
-		if prefixes == nil || want[c.Prefix] {
-			m := gw.statCheckout(c)
-			gw.stMu.Lock()
-			gw.metas[c.Prefix] = m
-			gw.stMu.Unlock()
-		}
-	}
 }
 
 // scanCheckoutMeta stamps every checkout and returns the ones whose metadata

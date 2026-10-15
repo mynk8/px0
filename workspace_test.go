@@ -464,3 +464,22 @@ func TestWatcherStartedBeforeBuildWatchesCheckouts(t *testing.T) {
 	}
 	t.Fatal("watcher never picked up the working set: it did not start for the workspace")
 }
+
+// git status may take index.lock to refresh a racily clean index, which makes
+// an agent's concurrent git add/commit fail. px0 must never write the index.
+func TestStatusDoesNotWriteIndex(t *testing.T) {
+	root := workspaceFixture(t)
+	beta := filepath.Join(root, "beta")
+	// Touch a tracked file without changing it: the index entry's stat data is
+	// now stale, which is what makes a plain `git status` rewrite the index.
+	later := time.Now().Add(2 * time.Second)
+	os.Chtimes(filepath.Join(beta, "b.go"), later, later)
+	idx := filepath.Join(beta, ".git", "index")
+	before, _ := os.Stat(idx)
+	gitStatusAgainst(beta, "HEAD")
+	gitStagedPaths(beta)
+	after, _ := os.Stat(idx)
+	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Fatal("git status rewrote the index; it must run without optional locks")
+	}
+}
