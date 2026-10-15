@@ -83,7 +83,7 @@ func computeDiffBase(worktree, srcRepo, token string, target PRTarget, baseRef s
 	diffBase = "HEAD"
 	var fetchErr string
 	baseRefspec := fmt.Sprintf("refs/heads/%s:refs/px0/base/%d", baseRef, num)
-	baseRemote := "origin"
+	baseRemote := srcRemoteFor(srcRepo, target)
 	if srcRepo == "" {
 		baseRemote = fmt.Sprintf("https://github.com/%s/%s.git", target.Owner, target.Repo)
 	}
@@ -96,7 +96,7 @@ func computeDiffBase(worktree, srcRepo, token string, target PRTarget, baseRef s
 		diffBase = mb
 	}
 	if diffBase == "HEAD" && srcRepo != "" {
-		if mb := gitMergeBase(worktree, "HEAD", "origin/"+baseRef); mb != "" {
+		if mb := gitMergeBase(worktree, "HEAD", baseRemote+"/"+baseRef); mb != "" {
 			diffBase = mb
 			fetchErr = "" // recovered via the local clone's own remote-tracking ref
 		}
@@ -144,15 +144,12 @@ func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd 
 	}
 	cleanup := func() { os.RemoveAll(tmp) }
 
+	// cwd's repo is reused when any of its remotes is the PR's repo: origin
+	// in a plain clone, upstream when origin is one's own fork.
 	srcRepo := ""
-	if info := gitProbe(cwd); info.ok {
-		if originURL, err := exec.Command("git", "-C", info.toplevel, "remote", "get-url", "origin").Output(); err == nil {
-			orig := strings.ToLower(strings.TrimSpace(string(originURL)))
-			if target.Owner != "" && target.Repo != "" &&
-				strings.Contains(orig, strings.ToLower(target.Owner)) &&
-				strings.Contains(orig, strings.ToLower(target.Repo)) {
-				srcRepo = info.toplevel
-			}
+	if info := gitProbe(cwd); info.ok && target.Owner != "" && target.Repo != "" {
+		if prRemoteName(info.toplevel, target.Owner, target.Repo) != "" {
+			srcRepo = info.toplevel
 		}
 	}
 
@@ -162,7 +159,7 @@ func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd 
 			onProgress(fmt.Sprintf("Fetching PR #%d head and preparing worktree...", num))
 		}
 		headRefspec := fmt.Sprintf("refs/pull/%d/head:refs/px0/pr/%d", num, num)
-		if out, err := exec.Command("git", "-C", srcRepo, "fetch", "--no-tags", "origin", headRefspec).CombinedOutput(); err != nil {
+		if out, err := exec.Command("git", "-C", srcRepo, "fetch", "--no-tags", srcRemoteFor(srcRepo, target), headRefspec).CombinedOutput(); err != nil {
 			cleanup()
 			return nil, fmt.Errorf("git fetch PR head: %w: %s", err, strings.TrimSpace(string(out)))
 		}
@@ -327,7 +324,7 @@ func (p *prSession) Pull() (info string, err error) {
 	if srcRepo != "" && token == "" {
 		newRef = fmt.Sprintf("refs/px0/pr/%d", num)
 		headRefspec := fmt.Sprintf("+refs/pull/%d/head:%s", num, newRef)
-		if out, err := exec.Command("git", "-C", srcRepo, "fetch", "--no-tags", "origin", headRefspec).CombinedOutput(); err != nil {
+		if out, err := exec.Command("git", "-C", srcRepo, "fetch", "--no-tags", srcRemoteFor(srcRepo, target), headRefspec).CombinedOutput(); err != nil {
 			return "", fmt.Errorf("git fetch PR head: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	} else {

@@ -31,3 +31,19 @@ func TestPRRepoFor(t *testing.T) {
 		t.Fatal("a linked worktree shares its repo's remotes")
 	}
 }
+
+func TestPRRemoteName(t *testing.T) {
+	root := workspaceFixture(t)
+	a := filepath.Join(root, "alpha")
+	gitTestRun(t, a, "remote", "add", "origin", "git@github.com:me/sontaran.git")
+	gitTestRun(t, a, "remote", "add", "upstream", "https://github.com/zenact-ai/sontaran.git")
+	if got := prRemoteName(a, "zenact-ai", "sontaran"); got != "upstream" {
+		t.Fatalf("fork setup: %q, want upstream", got)
+	}
+	if got := prRemoteName(a, "ME", "Sontaran"); got != "origin" {
+		t.Fatalf("case-insensitive origin match: %q", got)
+	}
+	if got := prRemoteName(a, "zenact-ai", "other"); got != "" {
+		t.Fatalf("no matching remote: %q", got)
+	}
+}

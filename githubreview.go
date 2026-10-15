@@ -56,3 +56,38 @@ func prRepoFor(root, branch string) (owner, repo, headOwner string, ok bool) {
 	}
 	return owner, repo, headOwner, true
 }
+
+// prRemoteName returns the remote of root whose URL is github.com/owner/repo
+// (upstream first, then origin, then any other), or "" when none is. In a fork
+// setup origin is one's own copy and upstream is where the PRs live.
+func prRemoteName(root, owner, repo string) string {
+	out, err := exec.Command("git", "-C", root, "remote").Output()
+	if err != nil {
+		return ""
+	}
+	names := strings.Fields(string(out))
+	order := []string{"upstream", "origin"}
+	for _, n := range names {
+		if n != "upstream" && n != "origin" {
+			order = append(order, n)
+		}
+	}
+	for _, n := range order {
+		o, r, ok := githubOwnerRepo(gitConfig(root, "remote."+n+".url"))
+		if ok && strings.EqualFold(o, owner) && strings.EqualFold(r, repo) {
+			return n
+		}
+	}
+	return ""
+}
+
+// srcRemoteFor names the remote of a reused local repo that holds the PR's
+// repo, keeping origin when nothing matches (the historical behaviour).
+func srcRemoteFor(srcRepo string, target PRTarget) string {
+	if srcRepo != "" {
+		if r := prRemoteName(srcRepo, target.Owner, target.Repo); r != "" {
+			return r
+		}
+	}
+	return "origin"
+}
