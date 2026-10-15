@@ -3020,3 +3020,19 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 .ws-scope button { margin-left: auto; border: 0; background: none; color: var(--faint); cursor: pointer; padding: 0 2px; }
 .ws-scope button:hover { color: var(--fg); }
 #tree.changed-only .tw:has(> .tr.ws-co .ws-up) { display: block; }
+
+/* Workspace colour coding: a dot per repo (its worktrees share it), and the
+   row's state on the name, counts and a left stripe. Theme variables only. */
+.ws-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.ws-group { display: flex; align-items: center; gap: 6px; }
+.tr.ws-co { border-left: 2px solid transparent; }
+.tr.ws-co.ws-agent-on { border-left-color: var(--accent); }
+.tr.ws-co.ws-agent-on .nm { color: var(--accent-fg); }
+.tr.ws-co.ws-dirty { border-left-color: var(--nc); }
+.tr.ws-co.ws-ahead { border-left-color: var(--gi); }
+.tr.ws-co.ws-clean .nm { color: var(--faint); }
+.tr.ws-co.ws-clean .ws-dot { opacity: .5; }
+.tr .ws-n { color: var(--nc); }
+.tr .ws-up { color: var(--gi); }
+.tr.ws-co.ws-detached .ws-br { color: var(--gd); opacity: .8; }
+.tr .ws-agent { background: var(--sel); }

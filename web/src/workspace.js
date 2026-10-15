@@ -72,7 +72,7 @@ function patchCheckoutRows() {
     const fresh = tmp.querySelector('.tr');
     row.innerHTML = fresh.innerHTML;
     row.title = fresh.title;
-    row.classList.toggle('dirty', fresh.classList.contains('dirty'));
+    row.className = fresh.className + (row.classList.contains('open') ? ' open' : '') + (row.classList.contains('sel') ? ' sel' : '');
   }
 }
 
@@ -99,17 +99,28 @@ function label(r) {
   return g && name.startsWith(g + '-') ? name.slice(g.length + 1) : name;
 }
 
+// One theme colour per repo, so a repo's worktrees read as a family.
+const REPO_HUES = ['--k', '--kt', '--nc', '--nt', '--m', '--s', '--cp', '--o', '--nf', '--err'];
+function repoHue(group) {
+  let h = 0;
+  for (const ch of group || '') h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return 'var(' + REPO_HUES[h % REPO_HUES.length] + ')';
+}
+
 function checkoutRow(r, depth) {
   const pad = 8 + depth * 12;
-  const ref = r.branch && r.branch !== 'HEAD' ? r.branch : (r.head ? '@' + r.head : '');
+  const detached = !(r.branch && r.branch !== 'HEAD');
+  const ref = detached ? (r.head ? '@' + r.head : '') : r.branch;
+  // State drives colour: agent working > uncommitted changes > unpushed only > clean.
+  const state = r.agent ? ' ws-agent-on' : r.changes ? ' ws-dirty' : r.ahead ? ' ws-ahead' : ' ws-clean';
   const marks =
     (r.agent ? '<span class="ws-agent" title="A coding agent is working here">agent</span>' : '') +
     (r.changes ? '<span class="ws-n" title="Uncommitted changes">' + r.changes + '</span>' : '') +
     (r.ahead ? '<span class="ws-up" title="Commits not pushed">↑' + r.ahead + '</span>' : '');
   const dirty = r.changes ? ' dirty' : '';
   const title = r.path + (ref ? ' · ' + ref : '') + (r.note ? ' — ' + r.note : '');
-  return '<div class="tw"><div class="tr dir ws-co' + dirty + '" data-dir="' + esc(r.path) + '" style="padding-left:' + pad + 'px" title="' + esc(title) + '">' +
-    '<span class="ar"></span><span class="nm">' + esc(label(r)) + '</span>' +
+  return '<div class="tw"><div class="tr dir ws-co' + dirty + state + (detached ? ' ws-detached' : '') + '" data-dir="' + esc(r.path) + '" style="padding-left:' + pad + 'px" title="' + esc(title) + '">' +
+    '<span class="ar"></span><span class="ws-dot" style="background:' + repoHue(r.main ? r.path : r.group) + '"></span><span class="nm">' + esc(label(r)) + '</span>' +
     '<span class="ws-br">' + esc(ref) + '</span>' +
     (r.note ? '<span class="ws-note">' + esc(r.note) + '</span>' : '') + marks +
     '<button class="ws-focus" data-focus="' + esc(r.path) + '" title="Scope px0 to this checkout" aria-label="Scope to this checkout"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/></svg></button></div>' +
@@ -130,7 +141,7 @@ export async function drawWorkspaceRoot(container) {
     list.sort((a, b) => (b.main - a.main) || a.path.localeCompare(b.path));
     const main = list.find(r => r.path === g);
     if (main) html += checkoutRow(main, 0);
-    else html += '<div class="ws-group" title="' + esc(g) + '">' + esc(g.split('/').pop()) + '</div>';
+    else html += '<div class="ws-group" title="' + esc(g) + '"><span class="ws-dot" style="background:' + repoHue(g) + '"></span>' + esc(g.split('/').pop()) + '</div>';
     for (const r of list) if (r !== main) html += checkoutRow(r, 1);
   }
   if (S.wsView === 'all') {
