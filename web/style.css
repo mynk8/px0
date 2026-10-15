@@ -6,7 +6,9 @@
 :root {
   --lh: 21px;
   --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, ui-monospace, monospace;
-  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Inter first: on Linux the system names below fall through to a Helvetica
+     clone that blurs at sidebar sizes. */
+  --ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Adwaita Sans", "Noto Sans", Roboto, Helvetica, Arial, sans-serif;
   --fs: 13.5px;
 
   --on-accent: #fff;
@@ -3051,3 +3053,19 @@ body.no-agent .git-instructions-wrap .git-link-sep { display: none !important; }
 }
 .tab.grouped { box-shadow: inset 0 2px 0 var(--g), inset 0 -1px 0 var(--line); }
 .tab.grouped.active { box-shadow: inset 0 2px 0 var(--g); }
+
+/* ---------- sidebar typography ---------- */
+/* Inter at 13px with roomier rows; names near foreground so they read without
+   squinting, folders and checkouts a step heavier; numbers in tabular figures. */
+#side, #right-side { font-feature-settings: "cv11", "ss01"; letter-spacing: -0.003em; }
+#side .tr, #right-side .tr { font-size: 13px; height: 24px; gap: 6px; }
+#side .tr.file .nm { color: color-mix(in srgb, var(--fg) 82%, var(--bg)); }
+#side .tr.file:hover .nm, #side .tr.sel .nm { color: var(--fg); }
+#side .tr.dir .nm { font-weight: 500; }
+#side .tr.ignored .nm { color: var(--faint); font-weight: 400; }
+#side .tr .gs, .tr .ws-n, .tr .ws-up, .scope-n, .up-file-stat { font-variant-numeric: tabular-nums; }
+.tr.ws-co .nm { font-weight: 600; }
+.tr .ws-br { font-size: 11px; letter-spacing: 0; }
+.tr .ws-note { font-size: 11.5px; }
+.ws-group { font-size: 11.5px; font-weight: 500; color: var(--dim); }
+#right-side { font-size: 12.5px; }
