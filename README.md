@@ -112,6 +112,8 @@ px0 set clear
 
 Agent detection reads process working directories from `/proc`, so it works on Linux only.
 
+**Pull requests.** px0's PR review (the PR bar, line comments with Alt+R, the Comments panel, replies, Submit / Approve / Request changes) follows the active checkout: open a file in a checkout whose branch has an open PR and its review UI appears. The palette's *Open Pull Request…* opens any PR as a review checkout beside its repo (`<repo>-review-pr<N>`, a git worktree of your local clone, matched through `origin` or `upstream`), in *This branch* mode so the PR's own diff shows. *Remove checkout* in the PR bar deletes it again; a checkout with changes is kept.
+
 ## Development
 
 ```bash
