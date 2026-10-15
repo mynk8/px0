@@ -88,6 +88,30 @@ Access securely over Tailscale, WireGuard, reverse proxy, or Cloudflare Tunnel
 with zero remote setup overhead and strict read-only sandboxing
 (path traversal protection & DNS rebinding checks).
 
+## Workspace mode
+
+Open a folder that is not itself a git repo but holds many repos and linked worktrees (for example `px0 ~/workspace`). px0 finds every checkout inside it and turns git on for all of them: status badges, side-by-side diffs, gutter markers, commit history and staging work for any file in any checkout. Nothing is written into the folder.
+
+- **Explorer views.** The explorer lists checkouts grouped by repo, each worktree under its main checkout with its branch, uncommitted changes and unpushed commits.
+  - **Working set** (the default) shows the checkouts a coding agent is running in right now, plus any added with `px0 set add`.
+  - **Changes** shows the checkouts with changes.
+  - **All** shows everything.
+- **Scope.** The target button on a checkout row scopes px0 to it: the tree, quick open, search and the git panel. ✕ in the bar under the header goes back to all checkouts.
+- **Git panel.** It acts on the checkout of the open file, or on the scoped one.
+- **Compare against.** In the diff menu, *Uncommitted* is the working tree against HEAD. *This branch* is everything since the branch's parent: the feature branch it tracks, else the repo's default branch. It shows one layer of a stack on its own.
+- **Coding agent.** Edits and threads run the harness inside the owning checkout, so it reads that repo's own `AGENTS.md` / `CLAUDE.md`.
+
+The working set lives in `~/.px0/set.json`. Agents and scripts manage it from the command line, and a running px0 updates within a second:
+
+```bash
+px0 set add . -note "what this checkout is for"   # the checkout containing the current directory
+px0 set remove ~/workspace/repo-feature-x
+px0 set list
+px0 set clear
+```
+
+Agent detection reads process working directories from `/proc`, so it works on Linux only.
+
 ## Development
 
 ```bash
