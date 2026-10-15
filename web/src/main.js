@@ -140,6 +140,7 @@ initPRScope();
     return !!(S.meta?.git && S.meta.gitChanges > 0);
   };
   const selectChangedFileTab = async () => {
+    if (isWorkspace()) return; // with many checkouts the first changed file is arbitrary
     if (S.tabs[S.active]?.diffAvailable) return;
     const changedTabIdx = S.tabs.findIndex(t => t.diffAvailable);
     if (changedTabIdx >= 0) {

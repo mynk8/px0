@@ -334,9 +334,13 @@ func (s *Server) handlePRCloseCheckout(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "only review checkouts (*-review-pr<N>) are removed here")
 		return
 	}
+	main := filepath.Dir(gitCommonDir(root)) // the repo that keeps the fetched PR ref
 	if out, err := exec.Command("git", "-C", root, "worktree", "remove", root).CombinedOutput(); err != nil {
 		fail(w, http.StatusConflict, strings.TrimSpace(string(out)))
 		return
+	}
+	if m := reviewCheckoutRe.FindStringSubmatch(filepath.Base(root)); m != nil {
+		exec.Command("git", "-C", main, "update-ref", "-d", "refs/px0/pr/"+m[1]).Run()
 	}
 	s.prsMu.Lock()
 	delete(s.prs, prefix)

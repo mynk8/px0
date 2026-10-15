@@ -119,7 +119,9 @@ function checkoutRow(r, depth) {
   const state = r.agent ? ' ws-agent-on' : r.changes ? ' ws-dirty' : r.ahead ? ' ws-ahead' : ' ws-clean';
   const marks =
     (r.agent ? '<span class="ws-agent" title="A coding agent is working here">agent</span>' : '') +
-    (r.changes ? '<span class="ws-n" title="Uncommitted changes">' + r.changes + '</span>' : '') +
+    (r.changes ? (r.mode === 'branch'
+      ? '<span class="ws-n ws-n-branch" title="Files changed on this branch (compared against ' + esc(r.parent || 'its parent') + ')">' + r.changes + '</span>'
+      : '<span class="ws-n" title="Uncommitted changes">' + r.changes + '</span>') : '') +
     (r.ahead ? '<span class="ws-up" title="Commits not pushed">↑' + r.ahead + '</span>' : '');
   const dirty = r.changes ? ' dirty' : '';
   const title = r.path + (ref ? ' · ' + ref : '') + (r.note ? ' — ' + r.note : '');

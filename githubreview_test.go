@@ -240,6 +240,9 @@ func TestOpenPRIntoWorkspace(t *testing.T) {
 	if _, ok := ix.CheckoutByPrefix("alpha-review-pr5"); ok {
 		t.Fatal("the review checkout is still listed after removal")
 	}
+	if refs := strings.TrimSpace(gitTestRun(t, a, "for-each-ref", "refs/px0/pr/5")); refs != "" {
+		t.Fatalf("the fetched PR ref outlived its checkout: %q", refs)
+	}
 	if code, _ := agentPost(t, s, "/api/pr/close-checkout?repo=alpha"); code != 400 {
 		t.Fatalf("closing a non-review checkout: %d, want 400", code)
 	}

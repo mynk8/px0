@@ -505,3 +505,22 @@ func TestWorktreeTickSkipsIdentity(t *testing.T) {
 		}
 	}
 }
+
+// A branch with no upstream: px0's ahead count would be every commit in its
+// history; the explorer shows only the commits on no remote at all.
+func TestRepoIdentityAheadWithoutUpstream(t *testing.T) {
+	root := workspaceFixture(t)
+	a := filepath.Join(root, "alpha")
+	bare := filepath.Join(t.TempDir(), "a.git")
+	gitTestRun(t, a, "clone", "-q", "--bare", a, bare)
+	gitTestRun(t, a, "remote", "add", "origin", bare)
+	gitTestRun(t, a, "fetch", "-q", "origin")
+	gitTestRun(t, a, "switch", "-q", "-c", "solo") // a new branch: on no remote, no upstream
+	os.WriteFile(filepath.Join(a, "n.go"), []byte("n\n"), 0o644)
+	gitTestRun(t, a, "add", "n.go")
+	gitTestRun(t, a, "commit", "-qm", "local only")
+	st := repoIdentity(root, checkout{Prefix: "alpha", Abs: a})
+	if st.Ahead != 1 || st.Behind != 0 {
+		t.Fatalf("ahead/behind = %d/%d, want 1/0 (only the commit on no remote)", st.Ahead, st.Behind)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -332,7 +333,16 @@ func repoIdentity(wsRoot string, c checkout) RepoState {
 	st.Main = st.Group == c.Prefix
 	st.Branch = gitCurrentBranch(c.Abs)
 	st.Head = gitHeadCommit(c.Abs)
-	st.Ahead, st.Behind, _ = gitAheadBehind(c.Abs)
+	var hasUpstream bool
+	st.Ahead, st.Behind, hasUpstream = gitAheadBehind(c.Abs)
+	if !hasUpstream {
+		// No upstream: px0 counts the whole history as ahead. Unpushed means
+		// the commits on no remote at all.
+		st.Ahead, st.Behind = 0, 0
+		if out, err := exec.Command("git", "-C", c.Abs, "rev-list", "--count", "HEAD", "--not", "--remotes").Output(); err == nil {
+			st.Ahead, _ = strconv.Atoi(strings.TrimSpace(string(out)))
+		}
+	}
 	return st
 }
 
