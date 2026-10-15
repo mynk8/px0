@@ -75,6 +75,9 @@ type thread struct {
 	L1      int    `json:"l1,omitempty"`
 	L2      int    `json:"l2,omitempty"`
 	Snippet string `json:"snippet,omitempty"`
+	// Dir is the workspace checkout the thread runs in (workspace mode), fixed
+	// at creation so a resumed harness session keeps its working directory.
+	Dir string `json:"dir,omitempty"`
 	// Scope is what a PR-review thread is about: "pr" (the whole pull request),
 	// "mine" (the reviewer's own changes on top of it) or "selection" (just the
 	// anchored code). ScopeSent is the scope the harness was last told, so a
@@ -294,7 +297,7 @@ func cloneThread(t *thread) *thread {
 
 // Create opens a thread anchored at path:l1-l2 (path may be empty for a thread
 // about the workspace as a whole) and starts its first turn.
-func (tm *threadManager) Create(abs, rel string, l1, l2 int, message, scope string) (*thread, error) {
+func (tm *threadManager) Create(abs, rel string, l1, l2 int, message, scope, checkout string) (*thread, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return nil, errors.New("message is empty")
@@ -307,6 +310,7 @@ func (tm *threadManager) Create(abs, rel string, l1, l2 int, message, scope stri
 		Created: time.Now().UnixMilli(),
 	}
 	t.Updated = t.Created
+	t.Dir = tm.checkoutOf(rel, checkout)
 	if rel != "" {
 		if l1 < 1 {
 			l1 = 1
@@ -422,7 +426,7 @@ func threadPrompt(t *thread, prior []*threadTurn, message string, replay bool, p
 			if t.L1 == t.L2 {
 				lineStr = fmt.Sprintf("line %d", t.L1)
 			}
-			fmt.Fprintf(&b, "The conversation started at @%s %s (the file may have changed since):\n```%s\n%s\n```\n\n", t.Path, lineStr, ext, t.Snippet)
+			fmt.Fprintf(&b, "The conversation started at @%s %s (the file may have changed since):\n```%s\n%s\n```\n\n", strings.TrimPrefix(t.Path, t.Dir+"/"), lineStr, ext, t.Snippet)
 		}
 	}
 	if replay && len(prior) > 0 {
@@ -497,7 +501,7 @@ func (tm *threadManager) Send(id, message string) (*thread, error) {
 		prior = append(prior, &c)
 	}
 	turn := &threadTurn{
-		ID: len(t.Turns) + 1, Prompt: message, Running: true, Tracked: gitAvailable(tm.root),
+		ID: len(t.Turns) + 1, Prompt: message, Running: true, Tracked: gitAvailable(tm.dirOf(t)),
 		Harness: name, Model: model, Started: time.Now().UnixMilli(),
 	}
 	t.Turns = append(t.Turns, turn)
@@ -518,12 +522,36 @@ func (tm *threadManager) Send(id, message string) (*thread, error) {
 	return tm.Get(id), nil
 }
 
+// checkoutOf names the workspace checkout a thread anchored at rel runs in:
+// the one owning rel, else the one the client named. Empty outside workspace
+// mode, so the thread runs in the served root as before.
+func (tm *threadManager) checkoutOf(rel, named string) string {
+	if rel != "" {
+		_, _, prefix := tm.agent.target(rel)
+		return prefix
+	}
+	if named != "" && tm.agent.dirFor != nil {
+		if _, _, prefix := tm.agent.target(named); prefix == named {
+			return prefix
+		}
+	}
+	return ""
+}
+
+// dirOf is the directory a thread's harness runs in.
+func (tm *threadManager) dirOf(t *thread) string {
+	if t.Dir == "" {
+		return tm.root
+	}
+	return filepath.Join(tm.root, filepath.FromSlash(t.Dir))
+}
+
 // createCursorChat asks cursor-agent for a chat id it will accept on --resume.
-func (tm *threadManager) createCursorChat(ctx context.Context, bin string) string {
+func (tm *threadManager) createCursorChat(ctx context.Context, bin, dir string) string {
 	c, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(c, bin, "create-chat")
-	cmd.Dir = tm.root
+	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -547,6 +575,7 @@ func (tm *threadManager) runTurn(ctx context.Context, cancel context.CancelFunc,
 		return
 	}
 	sessionID, live := t.SessionID, t.SessionLive
+	dir, prefix := tm.dirOf(t), t.Dir
 	tm.mu.Unlock()
 
 	if sessionID == "" {
@@ -554,7 +583,7 @@ func (tm *threadManager) runTurn(ctx context.Context, cancel context.CancelFunc,
 		case "claude", "gemini":
 			sessionID = newUUID()
 		case "cursor-agent":
-			sessionID = tm.createCursorChat(ctx, r.base[0])
+			sessionID = tm.createCursorChat(ctx, r.base[0], dir)
 		}
 	}
 	native := threadNative(r.name) && (sessionID != "" || r.name == "agy")
@@ -592,13 +621,13 @@ func (tm *threadManager) runTurn(ctx context.Context, cancel context.CancelFunc,
 		uiVerbosePrompt(0, r.name, prompt, os.Stdout)
 	}
 
-	before := worktreeSnapshot(tm.root)
+	before := worktreeSnapshot(dir)
 	started := time.Now()
 	stderr := &tailBuffer{max: agentLogBytes}
 	sink := &threadSink{tm: tm, tid: r.tid, turn: r.turn, harness: r.name}
 
 	res := harness.Run(ctx, harness.Command{Name: r.name, Args: argv, Model: r.model}, prompt, harness.Options{
-		Dir:      tm.root,
+		Dir:      dir,
 		Timeout:  threadTurnTimeout,
 		LogBytes: agentLogBytes,
 		Stdout:   sink,
@@ -610,7 +639,7 @@ func (tm *threadManager) runTurn(ctx context.Context, cancel context.CancelFunc,
 		err = errors.New(sink.failure)
 	}
 
-	changed := changedSince(tm.root, before)
+	changed := prefixPaths(prefix, changedSince(dir, before))
 	tm.agent.settle(changed)
 
 	tm.mu.Lock()
@@ -1096,11 +1125,12 @@ func (s *Server) handleThreadCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Path    string `json:"path"`
-		L1      int    `json:"l1"`
-		L2      int    `json:"l2"`
-		Message string `json:"message"`
-		Scope   string `json:"scope"`
+		Path     string `json:"path"`
+		L1       int    `json:"l1"`
+		L2       int    `json:"l2"`
+		Message  string `json:"message"`
+		Scope    string `json:"scope"`
+		Checkout string `json:"checkout"` // workspace mode: the checkout a thread with no anchor runs in
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		fail(w, 400, "bad request")
@@ -1114,7 +1144,7 @@ func (s *Server) handleThreadCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	t, err := s.threads.Create(abs, rel, body.L1, body.L2, body.Message, body.Scope)
+	t, err := s.threads.Create(abs, rel, body.L1, body.L2, body.Message, body.Scope, body.Checkout)
 	if err != nil {
 		fail(w, threadStatus(err), err.Error())
 		return
@@ -1297,6 +1327,7 @@ func (tm *threadManager) StartEdit(items []agentBatchItem) (*agentJob, error) {
 	if len(items) == 1 {
 		it := items[0]
 		t.Kind, t.Path, t.L1, t.L2 = "edit", it.Path, it.L1, it.L2
+		t.Dir = tm.checkoutOf(it.Path, "")
 		t.Snippet = anchorSnippet(it.Abs, it.L1, it.L2)
 		t.Title = "Edit: " + threadTitle(it.Instruction)
 		message = it.Instruction

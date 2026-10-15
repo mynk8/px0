@@ -407,3 +407,32 @@ func TestScopedFindAndSearch(t *testing.T) {
 		t.Fatalf("scopeFiles(alpha) = %v, want a.go and sub/s.go only", got)
 	}
 }
+
+func TestWorkspaceAgentRunsInCheckout(t *testing.T) {
+	root := workspaceFixture(t)
+	out := t.TempDir()
+	// The harness edits sub/s.go relative to its cwd and records where it ran.
+	s := agentServer(t, root, writeHarness(t,
+		"pwd > "+filepath.Join(out, "pwd.txt")+"\nprintf 'touched\\n' >> sub/s.go\nprintf '%s' \"$1\" > "+filepath.Join(out, "prompt.txt")+"\n"))
+	if code, _ := agentPost(t, s, "/api/agent/edit?path=alpha/sub/s.go&l1=1&l2=1&instruction=hi"); code != 200 {
+		t.Fatalf("edit = %d, want 200", code)
+	}
+	job := waitIdle(t, s)
+	if job.Error != "" {
+		t.Fatalf("harness failed: %s (log: %s)", job.Error, job.Log)
+	}
+	pwd, _ := os.ReadFile(filepath.Join(out, "pwd.txt"))
+	if strings.TrimSpace(string(pwd)) != filepath.Join(root, "alpha") {
+		t.Fatalf("harness ran in %q, want the alpha checkout", pwd)
+	}
+	if len(job.Changed) != 1 || job.Changed[0] != "alpha/sub/s.go" {
+		t.Fatalf("changed = %v, want [alpha/sub/s.go]", job.Changed)
+	}
+	if !job.Tracked {
+		t.Fatal("tracked should be true inside a checkout")
+	}
+	prompt, _ := os.ReadFile(filepath.Join(out, "prompt.txt"))
+	if !strings.Contains(string(prompt), "@sub/s.go line 1") {
+		t.Fatalf("prompt should name the file relative to the checkout:\n%s", prompt)
+	}
+}

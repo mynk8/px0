@@ -460,6 +460,7 @@ func fail(w http.ResponseWriter, code int, msg string) {
 func (s *Server) SetAgent(a *agentManager) {
 	s.agent = a
 	if a != nil {
+		a.dirFor = s.checkoutFor
 		s.threads = newThreadManager(a, s.ix.Root())
 		s.threads.prContext = s.prThreadContext
 		a.onEdit = func() {
@@ -1302,6 +1303,20 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 // since checkout). Committing in that session only ever changes yourDiff, so
 // the frontend can label the two apart instead of showing one blended diff
 // that looks the same whether or not the reviewer has touched anything.
+// checkoutFor names the checkout that owns rel in workspace mode: its
+// directory, rel relative to it, and its prefix. Empty outside workspace mode
+// or outside every checkout.
+func (s *Server) checkoutFor(rel string) (dir, repoRel, prefix string) {
+	if !s.ix.Workspace() {
+		return "", "", ""
+	}
+	c, rr, ok := s.ix.RepoFor(rel)
+	if !ok {
+		return "", "", ""
+	}
+	return c.Abs, rr, c.Prefix
+}
+
 // gitFor resolves the repo a per-file git call runs in. In a single repo that
 // is the root, unchanged. In workspace mode it is the checkout owning rel; a
 // path outside every checkout has no git (ok false).
@@ -1726,7 +1741,7 @@ func (s *Server) handleGitCommitMessage(w http.ResponseWriter, r *http.Request) 
 	if cfg := readSettings(); cfg.GitCommitMessageInstruction != nil {
 		instruction = strings.TrimSpace(*cfg.GitCommitMessageInstruction)
 	}
-	job, err := s.agent.StartPrompt("commit message", commitMessagePrompt(files, stat, diff, instruction))
+	job, err := s.agent.StartPromptIn(root, "commit message", commitMessagePrompt(files, stat, diff, instruction))
 	if err != nil {
 		code := http.StatusBadGateway
 		if errors.Is(err, errAgentNone) {

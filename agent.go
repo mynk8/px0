@@ -79,6 +79,9 @@ type agentJob struct {
 	BatchCount int              `json:"batchCount,omitempty"` // Number of items in batch review edit
 	Items      []agentBatchItem `json:"items,omitempty"`      // Detailed batch items if multi-file edit
 
+	dir    string // where the harness runs: the workspace root, or the owning checkout
+	prefix string // the checkout's workspace path, prefixed onto the paths it changed
+
 	ranges []agentRange
 	l1, l2 int
 	cancel context.CancelFunc
@@ -146,6 +149,10 @@ func (s *lineStreamer) Flush() {
 type agentManager struct {
 	root string
 	lsp  *lspManager
+
+	// dirFor names the checkout an edit to rel runs in (workspace mode): its
+	// directory, rel relative to it, and its workspace prefix. Empty dir: root.
+	dirFor func(rel string) (dir, repoRel, prefix string)
 
 	mu       sync.Mutex
 	selected string            // preset name, or the template itself when pinned
@@ -551,6 +558,14 @@ func (m *agentManager) StartBatch(items []agentBatchItem, force bool) (*agentJob
 		displayLines = fmt.Sprintf("%d edits", len(items))
 	}
 
+	// A single edit runs in the checkout that owns its file, so the harness
+	// loads that repo's own instructions and tooling. A batch can span
+	// checkouts and runs from the served root, as before.
+	dir, promptPath, prefix := m.root, items[0].Path, ""
+	if len(items) == 1 {
+		dir, promptPath, prefix = m.target(items[0].Path)
+	}
+
 	job := &agentJob{
 		ID:         m.seq,
 		Harness:    name,
@@ -558,7 +573,7 @@ func (m *agentManager) StartBatch(items []agentBatchItem, force bool) (*agentJob
 		Lines:      displayLines,
 		Running:    true,
 		Changed:    []string{},
-		Tracked:    gitAvailable(m.root),
+		Tracked:    gitAvailable(dir),
 		BatchCount: len(items),
 		Items:      items,
 		ranges:     ranges,
@@ -568,6 +583,8 @@ func (m *agentManager) StartBatch(items []agentBatchItem, force bool) (*agentJob
 		stderr:     &tailBuffer{max: agentLogBytes},
 		start:      time.Now(),
 		cancel:     cancel,
+		dir:        dir,
+		prefix:     prefix,
 	}
 	if m.jobs == nil {
 		m.jobs = map[int64]*agentJob{}
@@ -587,7 +604,7 @@ func (m *agentManager) StartBatch(items []agentBatchItem, force bool) (*agentJob
 
 	var prompt string
 	if len(items) == 1 {
-		prompt = agentPrompt(items[0].Path, items[0].L1, items[0].L2, prepared[0].snippet, items[0].Instruction)
+		prompt = agentPrompt(promptPath, items[0].L1, items[0].L2, prepared[0].snippet, items[0].Instruction)
 	} else {
 		prompt = agentBatchPrompt(prepared)
 	}
@@ -596,11 +613,40 @@ func (m *agentManager) StartBatch(items []agentBatchItem, force bool) (*agentJob
 	return m.Job(job.ID), nil
 }
 
+// target resolves where an edit to rel runs: the owning checkout in workspace
+// mode (with rel relative to it), else the served root.
+func (m *agentManager) target(rel string) (dir, repoRel, prefix string) {
+	if m.dirFor != nil {
+		if d, rr, p := m.dirFor(rel); d != "" {
+			return d, rr, p
+		}
+	}
+	return m.root, rel, ""
+}
+
+// prefixPaths makes checkout-relative paths workspace-relative again.
+func prefixPaths(prefix string, paths []string) []string {
+	if prefix == "" {
+		return paths
+	}
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = prefix + "/" + p
+	}
+	return out
+}
+
 // StartPrompt dispatches a one-shot prompt to the selected harness with no
 // target file -- used for generating text (e.g. a commit message) rather
 // than editing code. There is no file range to anchor an overlap check
 // against, so a prompt job is never blocked by, or blocks, a file edit.
 func (m *agentManager) StartPrompt(label, prompt string) (*agentJob, error) {
+	return m.StartPromptIn(m.root, label, prompt)
+}
+
+// StartPromptIn is StartPrompt with the harness run in dir (a workspace
+// checkout) instead of the served root.
+func (m *agentManager) StartPromptIn(dir, label, prompt string) (*agentJob, error) {
 	m.mu.Lock()
 	if m.args == nil {
 		m.mu.Unlock()
@@ -617,11 +663,12 @@ func (m *agentManager) StartPrompt(label, prompt string) (*agentJob, error) {
 		Path:    label,
 		Running: true,
 		Changed: []string{},
-		Tracked: gitAvailable(m.root),
+		Tracked: gitAvailable(dir),
 		out:     &tailBuffer{max: agentLogBytes},
 		stderr:  &tailBuffer{max: agentLogBytes},
 		start:   time.Now(),
 		cancel:  cancel,
+		dir:     dir,
 	}
 	if m.jobs == nil {
 		m.jobs = map[int64]*agentJob{}
@@ -655,13 +702,13 @@ func (m *agentManager) run(ctx context.Context, cancel context.CancelFunc, job *
 		uiVerbosePrompt(job.ID, job.Harness, prompt, os.Stdout)
 	}
 
-	before := worktreeSnapshot(m.root)
+	before := worktreeSnapshot(job.dir)
 
 	stdoutStreamer := newLineStreamer(job.out, uiFaint("│", os.Stdout), os.Stdout)
 	stderrStreamer := newLineStreamer(job.stderr, uiDim("│", os.Stdout), os.Stdout)
 
 	res := harness.Run(ctx, harness.Command{Name: job.Harness, Args: template}, prompt, harness.Options{
-		Dir:      m.root,
+		Dir:      job.dir,
 		Timeout:  agentTimeout,
 		LogBytes: agentLogBytes,
 		Stdout:   stdoutStreamer,
@@ -671,7 +718,7 @@ func (m *agentManager) run(ctx context.Context, cancel context.CancelFunc, job *
 	stderrStreamer.Flush()
 	err := res.Err
 
-	changed := changedSince(m.root, before)
+	changed := prefixPaths(job.prefix, changedSince(job.dir, before))
 	m.settle(changed)
 
 	m.mu.Lock()
