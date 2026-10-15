@@ -145,6 +145,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/git/pull"), s.handleGitPull)
 	s.mux.HandleFunc(s.routePath("/api/git/log"), s.handleGitLog)
 	s.mux.HandleFunc(s.routePath("/api/repos"), s.handleRepos)
+	s.mux.HandleFunc(s.routePath("/api/pr/open"), s.handlePROpen)
+	s.mux.HandleFunc(s.routePath("/api/pr/close-checkout"), s.handlePRCloseCheckout)
 	s.mux.HandleFunc(s.routePath("/api/git/base"), s.handleGitBase)
 	s.mux.HandleFunc(s.routePath("/api/unpushed"), s.handleUnpushed)
 	s.mux.HandleFunc(s.routePath("/api/commitfiles"), s.handleCommitFiles)
@@ -2122,11 +2124,7 @@ func (s *Server) handleDef(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
-	EvictAll()
-	s.ix.Build()
-	if s.gitWatcher != nil {
-		s.gitWatcher.Trigger()
-	}
+	s.reindex()
 	if s.lsp != nil {
 		s.lsp.RefreshOpenDocs()
 	}

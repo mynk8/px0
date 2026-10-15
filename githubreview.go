@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -254,4 +256,100 @@ func withPrefix(prefix, path string) string {
 		return path
 	}
 	return prefix + "/" + path
+}
+
+// handlePROpen opens a pull request inside the workspace (POST {target}): a
+// detached worktree at the PR head, beside the checkout whose remote is the
+// PR's repo, named <checkout>-review-pr<N>. An existing one is reused.
+func (s *Server) handlePROpen(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	if !s.ix.Workspace() {
+		fail(w, http.StatusBadRequest, "only in workspace mode")
+		return
+	}
+	var body struct {
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		fail(w, http.StatusBadRequest, "target is required")
+		return
+	}
+	_, target, ok := DetectPRURL(body.Target)
+	if !ok || target.Provider != "github" {
+		fail(w, http.StatusBadRequest, "target must be a GitHub pull request URL")
+		return
+	}
+	// The repo's main checkout first: its folder names the review checkout.
+	var src checkout
+	var remote string
+	for _, mainOnly := range []bool{true, false} {
+		for _, c := range s.ix.Checkouts() {
+			if mainOnly && gitCommonDir(c.Abs) != filepath.Join(c.Abs, ".git") {
+				continue
+			}
+			if rem := prRemoteName(c.Abs, target.Owner, target.Repo); rem != "" && remote == "" {
+				src, remote = c, rem
+			}
+		}
+	}
+	if remote == "" {
+		fail(w, http.StatusNotFound, fmt.Sprintf("no checkout in this workspace has %s/%s as a remote", target.Owner, target.Repo))
+		return
+	}
+	dir := filepath.Join(filepath.Dir(src.Abs), fmt.Sprintf("%s-review-pr%d", filepath.Base(src.Abs), target.Number))
+	if _, err := os.Stat(dir); err != nil {
+		token, _ := resolveGitHubToken(readSettings())
+		ref := fmt.Sprintf("refs/px0/pr/%d", target.Number)
+		if out, err := gitAuthCmd(token, "-C", src.Abs, "fetch", "--no-tags", remote, fmt.Sprintf("+refs/pull/%d/head:%s", target.Number, ref)).CombinedOutput(); err != nil {
+			fail(w, http.StatusBadGateway, "git fetch PR head: "+strings.TrimSpace(string(out)))
+			return
+		}
+		if out, err := exec.Command("git", "-C", src.Abs, "worktree", "add", "--detach", dir, ref).CombinedOutput(); err != nil {
+			fail(w, http.StatusBadGateway, "git worktree add: "+strings.TrimSpace(string(out)))
+			return
+		}
+		s.reindex()
+	}
+	rel, err := filepath.Rel(s.ix.Root(), dir)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		fail(w, http.StatusInternalServerError, "review checkout is outside the workspace")
+		return
+	}
+	writeJSON(w, map[string]any{"checkout": filepath.ToSlash(rel)})
+}
+
+// handlePRCloseCheckout removes a review checkout (POST ?repo=). Never forced:
+// a checkout with changes stays, and git's reason is returned.
+func (s *Server) handlePRCloseCheckout(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	root, prefix, ok := s.repoRoot(w, r)
+	if !ok {
+		return
+	}
+	if !reviewCheckoutRe.MatchString(filepath.Base(root)) {
+		fail(w, http.StatusBadRequest, "only review checkouts (*-review-pr<N>) are removed here")
+		return
+	}
+	if out, err := exec.Command("git", "-C", root, "worktree", "remove", root).CombinedOutput(); err != nil {
+		fail(w, http.StatusConflict, strings.TrimSpace(string(out)))
+		return
+	}
+	s.prsMu.Lock()
+	delete(s.prs, prefix)
+	s.prsMu.Unlock()
+	s.reindex()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// reindex rebuilds the index after checkouts appeared or went, as /api/reindex does.
+func (s *Server) reindex() {
+	EvictAll()
+	s.ix.Build()
+	if s.gitWatcher != nil {
+		s.gitWatcher.Trigger()
+	}
 }

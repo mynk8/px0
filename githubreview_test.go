@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,3 +175,59 @@ func TestWorkspacePRRoutesPerCheckout(t *testing.T) {
 }
 
 func httptestRequest(url string) *http.Request { return httptest.NewRequest(http.MethodGet, url, nil) }
+
+// TestOpenPRIntoWorkspace: the PR's repo is a local bare repo reached through
+// git's url.insteadOf, holding refs/pull/5/head like GitHub does.
+func TestOpenPRIntoWorkspace(t *testing.T) {
+	root := workspaceFixture(t)
+	isolateSettings(t)
+	t.Setenv("GITHUB_TOKEN", "")
+	a := filepath.Join(root, "alpha")
+	bare := filepath.Join(t.TempDir(), "x.git")
+	gitTestRun(t, a, "clone", "-q", "--bare", a, bare)
+	gitTestRun(t, a, "switch", "-q", "-c", "pr5")
+	os.WriteFile(filepath.Join(a, "pr.go"), []byte("pr\n"), 0o644)
+	gitTestRun(t, a, "add", "pr.go")
+	gitTestRun(t, a, "commit", "-qm", "pr five")
+	prHead := strings.TrimSpace(gitTestRun(t, a, "rev-parse", "HEAD"))
+	gitTestRun(t, a, "push", "-q", bare, "pr5:refs/pull/5/head")
+	gitTestRun(t, a, "switch", "-q", "main")
+	gitTestRun(t, a, "remote", "add", "upstream", "https://github.com/o/x.git")
+	gitTestRun(t, a, "config", "url."+bare+".insteadOf", "https://github.com/o/x.git")
+
+	ix := NewIndex(root)
+	ix.Build()
+	s := NewServer(ix, nil)
+	code, m := agentPostJSON(t, s, "/api/pr/open", map[string]string{"target": "https://github.com/o/x/pull/5"})
+	if code != 200 || m["checkout"] != "alpha-review-pr5" {
+		t.Fatalf("open: %d %v", code, m)
+	}
+	c, ok := ix.CheckoutByPrefix("alpha-review-pr5")
+	if !ok {
+		t.Fatal("the review checkout is not in the workspace after opening")
+	}
+	if got := strings.TrimSpace(gitTestRun(t, c.Abs, "rev-parse", "HEAD")); got != prHead {
+		t.Fatalf("review checkout at %s, want the PR head %s", got, prHead)
+	}
+	if code, m := agentPostJSON(t, s, "/api/pr/open", map[string]string{"target": "https://github.com/o/x/pull/5"}); code != 200 || m["checkout"] != "alpha-review-pr5" {
+		t.Fatalf("second open must reuse: %d %v", code, m)
+	}
+	if code, _ := agentPostJSON(t, s, "/api/pr/open", map[string]string{"target": "https://github.com/o/other/pull/1"}); code != 404 {
+		t.Fatalf("no checkout of that repo: %d, want 404", code)
+	}
+	// A review checkout with changes is kept.
+	os.WriteFile(filepath.Join(c.Abs, "pr.go"), []byte("edited\n"), 0o644)
+	if code, _ := agentPost(t, s, "/api/pr/close-checkout?repo=alpha-review-pr5"); code != 409 {
+		t.Fatalf("dirty close: %d, want 409", code)
+	}
+	gitTestRun(t, c.Abs, "checkout", "--", "pr.go")
+	if code, _ := agentPost(t, s, "/api/pr/close-checkout?repo=alpha-review-pr5"); code != 200 {
+		t.Fatalf("clean close: %d", code)
+	}
+	if _, ok := ix.CheckoutByPrefix("alpha-review-pr5"); ok {
+		t.Fatal("the review checkout is still listed after removal")
+	}
+	if code, _ := agentPost(t, s, "/api/pr/close-checkout?repo=alpha"); code != 400 {
+		t.Fatalf("closing a non-review checkout: %d, want 400", code)
+	}
+}
