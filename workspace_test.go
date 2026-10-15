@@ -173,3 +173,45 @@ func TestWorkspaceFileDiffGutterStage(t *testing.T) {
 		t.Fatalf("unstage: %d", code)
 	}
 }
+
+func TestWorkspaceWholeRepoEndpoints(t *testing.T) {
+	root := workspaceFixture(t)
+	os.WriteFile(filepath.Join(root, "beta/b.go"), []byte("b2\n"), 0o644)
+	ix := NewIndex(root)
+	ix.Build()
+	s := NewServer(ix, nil)
+
+	// No repo, or an unknown one: refused, nothing runs in the workspace root.
+	if code, _ := agentPostJSON(t, s, "/api/git/stage", map[string]string{"path": "."}); code != 400 {
+		t.Fatalf("stage-all without repo: %d, want 400", code)
+	}
+	if code, _ := agentPostJSON(t, s, "/api/git/commit?repo=nope", map[string]string{"message": "x"}); code != 400 {
+		t.Fatalf("commit unknown repo: %d, want 400", code)
+	}
+	if code, _ := agentPost(t, s, "/api/git/push"); code != 400 {
+		t.Fatalf("push without repo: %d, want 400", code)
+	}
+	if code, _ := agentPostJSON(t, s, "/api/git/stage?repo=beta", map[string]string{"path": "."}); code != 200 {
+		t.Fatalf("stage-all beta: %d", code)
+	}
+	if code, m := agentPostJSON(t, s, "/api/git/commit?repo=beta", map[string]string{"message": "beta change"}); code != 200 {
+		t.Fatalf("commit beta: %d %v", code, m)
+	}
+	if out := gitTestRun(t, filepath.Join(root, "beta"), "log", "-1", "--format=%s"); strings.TrimSpace(out) != "beta change" {
+		t.Fatalf("beta head = %q", out)
+	}
+	_, m := get(t, s, "/api/git/log?repo=beta")
+	commits := m["commits"].([]any)
+	sha := commits[0].(map[string]any)["full"].(string)
+	_, m = get(t, s, "/api/commitfiles?repo=beta&sha="+sha)
+	f0 := m["files"].([]any)[0].(map[string]any)
+	if f0["path"] != "beta/b.go" {
+		t.Fatalf("commit file path = %v, want beta/b.go", f0["path"])
+	}
+	if code, _ := get(t, s, "/api/commitdetail?repo=beta&sha="+sha); code != 200 {
+		t.Fatalf("commitdetail: %d", code)
+	}
+	if _, m := get(t, s, "/api/diff?path=beta/b.go&ref="+sha); m["available"] != true {
+		t.Fatalf("commit diff: %v", m)
+	}
+}

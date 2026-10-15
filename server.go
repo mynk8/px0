@@ -1516,6 +1516,21 @@ func (s *Server) handleGitRefresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// repoRoot names the repo a whole-repo action runs in. A single-repo px0 has
+// one; a workspace requires ?repo=<checkout path>, so nothing ever runs in the
+// workspace folder itself.
+func (s *Server) repoRoot(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+	if !s.ix.Workspace() {
+		return s.ix.Root(), "", true
+	}
+	c, ok := s.ix.CheckoutByPrefix(strings.Trim(r.URL.Query().Get("repo"), "/"))
+	if !ok {
+		fail(w, http.StatusBadRequest, "repo is required: name the checkout")
+		return "", "", false
+	}
+	return c.Abs, c.Prefix, true
+}
+
 func (s *Server) decodeGitPath(w http.ResponseWriter, r *http.Request) (rel string, ok bool) {
 	var body struct {
 		Path string `json:"path"`
@@ -1542,6 +1557,14 @@ func (s *Server) handleGitStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	groot, grel, _, gok := s.gitFor(rel)
+	if rel == "" && s.ix.Workspace() {
+		// Stage-all names its checkout; it never runs in the workspace folder.
+		root, _, ok := s.repoRoot(w, r)
+		if !ok {
+			return
+		}
+		groot, grel, gok = root, ".", true
+	}
 	if !gok {
 		fail(w, http.StatusBadRequest, "not inside a git checkout")
 		return
@@ -1567,6 +1590,14 @@ func (s *Server) handleGitUnstage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	groot, grel, _, gok := s.gitFor(rel)
+	if rel == "" && s.ix.Workspace() {
+		// Stage-all names its checkout; it never runs in the workspace folder.
+		root, _, ok := s.repoRoot(w, r)
+		if !ok {
+			return
+		}
+		groot, grel, gok = root, ".", true
+	}
 	if !gok {
 		fail(w, http.StatusBadRequest, "not inside a git checkout")
 		return
@@ -1593,7 +1624,11 @@ func (s *Server) handleGitCommit(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "message is required")
 		return
 	}
-	if err := gitCommit(s.ix.Root(), strings.TrimSpace(body.Message)); err != nil {
+	root, _, ok := s.repoRoot(w, r)
+	if !ok {
+		return
+	}
+	if err := gitCommit(root, strings.TrimSpace(body.Message)); err != nil {
 		fail(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -1615,7 +1650,10 @@ func (s *Server) handleGitCommitMessage(w http.ResponseWriter, r *http.Request) 
 	if !s.agentOrFail(w) {
 		return
 	}
-	root := s.ix.Root()
+	root, _, ok := s.repoRoot(w, r)
+	if !ok {
+		return
+	}
 	files := gitStagedFiles(root)
 	if len(files) == 0 {
 		// Auto-stage all uncommitted changes if nothing is staged
@@ -1676,7 +1714,10 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": true})
 		return
 	}
-	root := s.ix.Root()
+	root, _, ok := s.repoRoot(w, r)
+	if !ok {
+		return
+	}
 	out, err := gitPush(root)
 	if err != nil && strings.Contains(out, "has no upstream branch") {
 		if branch := gitCurrentBranch(root); branch != "" && branch != "HEAD" {
@@ -1726,7 +1767,10 @@ func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	root := s.ix.Root()
+	root, _, ok := s.repoRoot(w, r)
+	if !ok {
+		return
+	}
 	if gitHasUncommittedChanges(root) {
 		fail(w, http.StatusConflict, "commit or discard your local changes before pulling")
 		return
@@ -1736,8 +1780,8 @@ func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "not on a branch")
 		return
 	}
-	remote, remoteBranch, ok := gitUpstream(root, branch)
-	if !ok {
+	remote, remoteBranch, hasUp := gitUpstream(root, branch)
+	if !hasUp {
 		fail(w, http.StatusBadRequest, "no upstream branch configured for "+branch)
 		return
 	}
@@ -1767,9 +1811,13 @@ func (s *Server) handleGitLog(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	branch := gitCurrentBranch(s.ix.Root())
-	commits := gitRecentCommits(s.ix.Root(), limit)
-	commitsURL := gitCommitsWebURL(s.ix.Root(), branch)
+	root, _, ok := s.repoRoot(w, r)
+	if !ok {
+		return
+	}
+	branch := gitCurrentBranch(root)
+	commits := gitRecentCommits(root, limit)
+	commitsURL := gitCommitsWebURL(root, branch)
 	writeJSON(w, map[string]any{
 		"commits":    commits,
 		"commitsUrl": commitsURL,
@@ -1803,7 +1851,11 @@ func (s *Server) handleUnpushed(w http.ResponseWriter, r *http.Request) {
 		commits = gitCommitsSince(s.ix.Root(), head, limit)
 		upstream = fmt.Sprintf("PR #%d head (%s)", s.pr.meta.Number, branch)
 	} else {
-		upstream, commits = gitUnpushedCommits(s.ix.Root(), limit)
+		root, _, ok := s.repoRoot(w, r)
+		if !ok {
+			return
+		}
+		upstream, commits = gitUnpushedCommits(root, limit)
 	}
 	if commits == nil {
 		commits = []UnpushedCommit{}
@@ -1824,10 +1876,23 @@ func (s *Server) handleCommitFiles(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	root, prefix, ok := s.repoRoot(w, r)
+	if !ok {
+		return
+	}
 	sha := r.URL.Query().Get("sha")
-	files := gitCommitFiles(s.ix.Root(), sha)
+	files := gitCommitFiles(root, sha)
 	if files == nil {
 		files = []CommitFile{}
+	}
+	// Workspace paths: a commit's files open by their workspace-relative path.
+	for i := range files {
+		if prefix != "" {
+			files[i].Path = prefix + "/" + files[i].Path
+			if files[i].From != "" {
+				files[i].From = prefix + "/" + files[i].From
+			}
+		}
 	}
 	writeJSON(w, map[string]any{"sha": sha, "files": files})
 }
@@ -1839,9 +1904,13 @@ func (s *Server) handleCommitDetail(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	sha := r.URL.Query().Get("sha")
-	d, ok := gitCommitDetail(s.ix.Root(), sha)
+	root, _, ok := s.repoRoot(w, r)
 	if !ok {
+		return
+	}
+	sha := r.URL.Query().Get("sha")
+	d, found := gitCommitDetail(root, sha)
+	if !found {
 		fail(w, http.StatusNotFound, "unknown commit")
 		return
 	}
