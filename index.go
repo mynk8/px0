@@ -61,6 +61,13 @@ type Index struct {
 	prFiles          map[string]string
 	pushedHead       string // PR mode: remote branch tip as of the last push; bounds "unpushed"
 	readyCh          chan struct{}
+
+	workspace bool                         // root is not a repo but holds checkouts (workspace.go)
+	checkouts []checkout                   // sorted by Prefix
+	repoGS    map[string]map[string]string // checkout prefix -> repo-relative status
+	repoSG    map[string]map[string]bool   // checkout prefix -> repo-relative staged
+	repoMode  map[string]string            // checkout prefix -> "head" | "branch"
+	repoBase  map[string]string            // checkout prefix -> resolved diff base
 }
 
 // NewIndex constructs a new unpopulated workspace index for the given root directory.
@@ -355,6 +362,7 @@ func (ix *Index) Build() {
 	var (
 		mu       sync.Mutex
 		files    []FileEntry
+		found    []checkout
 		children = map[string][]Node{}
 		wg       sync.WaitGroup
 		sem      = make(chan struct{}, runtime.NumCPU()*4)
@@ -387,6 +395,9 @@ func (ix *Index) Build() {
 			if e.Type()&os.ModeSymlink != 0 {
 				continue
 			}
+			if !isDir && name == ".git" {
+				continue // a linked worktree's pointer file, not content
+			}
 			if ig.Match(childRel, isDir) {
 				// Listed so the tree can show it dimmed, but never walked or
 				// indexed, so search and quick open stay out of it.
@@ -396,6 +407,11 @@ func (ix *Index) Build() {
 				continue
 			}
 			if isDir {
+				if _, err := os.Lstat(filepath.Join(abs, name, ".git")); err == nil {
+					mu.Lock()
+					found = append(found, checkout{Prefix: childRel, Abs: filepath.Join(abs, name)})
+					mu.Unlock()
+				}
 				kids = append(kids, Node{Name: name, Path: childRel, Dir: true, Dirty: dirtyDirs[childRel], YourDirty: yourDirtyDirs[childRel]})
 				subdirs = append(subdirs, struct{ abs, rel string }{filepath.Join(abs, name), childRel})
 				continue
@@ -464,6 +480,7 @@ func (ix *Index) Build() {
 	wg.Add(1)
 	walk(ix.root, "", root)
 	wg.Wait()
+	cos := validCheckouts(ix.root, found)
 
 	injectDeletedNodes(children, gs, staged, yourStatuses, dirtyDirs, yourDirtyDirs)
 
@@ -476,6 +493,8 @@ func (ix *Index) Build() {
 	ix.gitStagedMap = staged
 	ix.gitYourStatusMap = yourStatuses
 	ix.files, ix.children = files, children
+	ix.workspace = len(cos) > 0
+	ix.checkouts = cos
 	ix.builtAt, ix.buildMS = time.Now(), time.Since(start).Milliseconds()
 	select {
 	case <-ix.readyCh:
