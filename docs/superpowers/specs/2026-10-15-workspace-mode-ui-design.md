@@ -23,8 +23,12 @@ Build first, in this order; everything else waits until v1 is in daily use:
    the tracked feature branch, else trunk.
 5. Agent runs in the owning checkout (§5).
 
+6. Working set (§6): the explorer shows only the checkouts an agent is running
+   in or that were added to the set, and agents control the set from the CLI.
+
 Deferred: the stack section in the git panel, `needs restack`, the
-nearest-ancestor parent rule, and the `#` palette prefix.
+nearest-ancestor parent rule, the `#` palette prefix, and the `+ N clean`
+collapse row.
 
 ## Principles
 
@@ -149,6 +153,32 @@ the checkout that owns the file, so it loads that repo's `AGENTS.md` /
 
 `worktreeSnapshot` / `changedSince` run on that checkout, and changed paths are
 reported with its prefix so open tabs reload as today.
+
+## 6. Working set
+
+The main purpose is working with agents without leaving the review loop, so the
+explorer's default view shows only the checkouts that matter now.
+
+- **Agent running**: a checkout is active when a coding-agent process
+  (`claude`, `codex`, `gemini`, `cursor-agent`, `opencode`, `aider`, `goose`,
+  `agy`) has its working directory inside it. Read from `/proc/*/cwd` and
+  `/proc/*/cmdline` on Linux; elsewhere nothing is detected. Rescanned every
+  5 s while a client is connected. The row shows an `agent` marker.
+- **Added to the set**: `~/.px0/set.json` (or `$XDG_CONFIG_HOME/px0/set.json`)
+  holds `{"items":[{"path":"<absolute checkout path>","note":"...","added":"<RFC3339>"}]}`.
+  It lives with px0's other per-user files, never in a workspace. The running
+  server stat-polls it each second and broadcasts changes.
+- **CLI**, usable by any agent or script, server running or not:
+  - `px0 set add [path] [-note text]`: path defaults to `.`; it is resolved to
+    its checkout's top level (`git rev-parse --show-toplevel`), so `px0 set add`
+    from inside a worktree adds that worktree. Adding again updates the note.
+  - `px0 set remove [path]`
+  - `px0 set list`: one line per item, `path<TAB>note`.
+  - `px0 set clear`
+- Views in the explorer toggle: **Working set** (default; falls back to the
+  checkouts with changes when the set is empty and no agent runs), **Changes**,
+  **All**.
+- A row's note shows as muted text after the branch.
 
 ## Non-goals
 
