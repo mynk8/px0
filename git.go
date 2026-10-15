@@ -1150,3 +1150,13 @@ func gitCommitsWebURL(root, branch string) string {
 	}
 	return fmt.Sprintf("https://%s/%s/%s", host, path, seg)
 }
+
+// gitCommonDir is the .git directory shared by a repo and all its linked
+// worktrees: the same value for every checkout of one repo.
+func gitCommonDir(root string) string {
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		return ""
+	}
+	return filepath.Clean(strings.TrimSpace(string(out)))
+}

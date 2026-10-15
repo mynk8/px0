@@ -215,3 +215,42 @@ func TestWorkspaceWholeRepoEndpoints(t *testing.T) {
 		t.Fatalf("commit diff: %v", m)
 	}
 }
+
+func TestWorkspaceRepoStatesAndWatcher(t *testing.T) {
+	root := workspaceFixture(t)
+	ix := NewIndex(root)
+	ix.Build()
+	gw := NewGitWatcher(ix)
+	gw.scanCheckoutMeta() // record the starting stamps
+	p := gw.Refresh()
+	if !p.Workspace || len(p.Repos) != 3 {
+		t.Fatalf("payload workspace=%v repos=%v", p.Workspace, p.Repos)
+	}
+	by := map[string]RepoState{}
+	for _, r := range gw.RepoStates() {
+		by[r.Path] = r
+	}
+	if by["alpha-wt"].Group != "alpha" || by["alpha-wt"].Main || !by["alpha"].Main {
+		t.Fatalf("grouping: %+v", by)
+	}
+	if by["alpha-wt"].Branch != "feat" || by["beta"].Branch != "main" || by["beta"].Head == "" {
+		t.Fatalf("branches: %+v", by)
+	}
+	// A CLI command in one checkout is seen through its metadata.
+	os.WriteFile(filepath.Join(root, "beta/c.go"), []byte("c\n"), 0o644)
+	gitTestRun(t, filepath.Join(root, "beta"), "add", "c.go")
+	changed := gw.scanCheckoutMeta()
+	if len(changed) != 1 || changed[0] != "beta" {
+		t.Fatalf("scanCheckoutMeta = %v, want [beta]", changed)
+	}
+	gw.refreshFor(changed)
+	for _, r := range gw.RepoStates() {
+		if r.Path == "beta" && (r.Staged != 1 || r.Changes != 1) {
+			t.Fatalf("beta = %+v, want 1 staged, 1 change", r)
+		}
+	}
+	s := NewServer(ix, nil)
+	if _, m := get(t, s, "/api/repos"); len(m["repos"].([]any)) != 3 {
+		t.Fatalf("/api/repos = %v", m)
+	}
+}

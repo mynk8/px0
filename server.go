@@ -140,6 +140,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/git/push"), s.handleGitPush)
 	s.mux.HandleFunc(s.routePath("/api/git/pull"), s.handleGitPull)
 	s.mux.HandleFunc(s.routePath("/api/git/log"), s.handleGitLog)
+	s.mux.HandleFunc(s.routePath("/api/repos"), s.handleRepos)
 	s.mux.HandleFunc(s.routePath("/api/unpushed"), s.handleUnpushed)
 	s.mux.HandleFunc(s.routePath("/api/commitfiles"), s.handleCommitFiles)
 	s.mux.HandleFunc(s.routePath("/api/commitdetail"), s.handleCommitDetail)
@@ -1514,6 +1515,18 @@ func (s *Server) handleGitRefresh(w http.ResponseWriter, r *http.Request) {
 		"gitFiles":   files,
 		"statuses":   s.ix.GitStatusMap(),
 	})
+}
+
+// handleRepos lists every checkout's state in workspace mode (empty otherwise).
+func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	repos := []RepoState{}
+	if s.gitWatcher != nil {
+		if s.ix.Workspace() && len(s.gitWatcher.RepoStates()) == 0 {
+			s.gitWatcher.Refresh() // asked before the first watcher refresh
+		}
+		repos = append(repos, s.gitWatcher.RepoStates()...)
+	}
+	writeJSON(w, map[string]any{"repos": repos})
 }
 
 // repoRoot names the repo a whole-repo action runs in. A single-repo px0 has

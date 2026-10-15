@@ -198,3 +198,40 @@ func (ix *Index) CheckoutCounts(prefix string) (changes, staged int) {
 
 // resolveRepoBase recomputes a checkout's base for its mode (Task 6).
 func (ix *Index) resolveRepoBase(c checkout) {}
+
+// RepoState is one checkout as the explorer and git panel show it.
+type RepoState struct {
+	Path    string `json:"path"`             // workspace-relative checkout path
+	Group   string `json:"group"`            // the repo's main checkout (workspace-relative, or absolute when outside)
+	Main    bool   `json:"main,omitempty"`   // this is the repo's main checkout
+	Branch  string `json:"branch,omitempty"` // "HEAD" when detached
+	Head    string `json:"head,omitempty"`   // short SHA
+	Ahead   int    `json:"ahead"`
+	Behind  int    `json:"behind"`
+	Changes int    `json:"changes"`
+	Staged  int    `json:"staged"`
+	Mode    string `json:"mode"`             // "head" | "branch"
+	Parent  string `json:"parent,omitempty"` // "branch" mode: the parent ref
+	Agent   bool   `json:"agent,omitempty"`  // a coding agent is working in it
+	InSet   bool   `json:"inSet,omitempty"`  // added to the working set
+	Note    string `json:"note,omitempty"`   // working-set note
+}
+
+// repoIdentity fills the parts of a RepoState that only change when refs or
+// HEAD move: group, branch, head, ahead/behind.
+func repoIdentity(wsRoot string, c checkout) RepoState {
+	st := RepoState{Path: c.Prefix, Mode: "head"}
+	if cd := gitCommonDir(c.Abs); cd != "" {
+		main := filepath.Dir(cd)
+		if rel, err := filepath.Rel(wsRoot, main); err == nil && !strings.HasPrefix(rel, "..") {
+			st.Group = filepath.ToSlash(rel)
+		} else {
+			st.Group = main
+		}
+	}
+	st.Main = st.Group == c.Prefix
+	st.Branch = gitCurrentBranch(c.Abs)
+	st.Head = gitHeadCommit(c.Abs)
+	st.Ahead, st.Behind, _ = gitAheadBehind(c.Abs)
+	return st
+}
