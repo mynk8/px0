@@ -5,6 +5,7 @@
 // so a commit of thousands of files costs no more DOM than one of a hundred
 // until someone asks for more.
 import { activeRepo, repoQuery } from './workspace.js';
+import { commitKey } from './workspace-view.js';
 import { esc, api } from './state.js';
 
 export const COMMIT_FILES_PAGE = 100;
@@ -13,9 +14,9 @@ const fileLists = new Map(); // SHA -> CommitFile[] once loaded, or the pending 
 
 // A commit's files never change, so each list is fetched once and shared by the
 // sidebar rows and the diff strip.
-// Keyed by checkout too: in workspace mode two repos can share no SHA in
-// practice, but the request must name the repo the commit lives in.
-const cacheKey = sha => activeRepo() + ':' + sha;
+// Keyed by checkout too: worktrees of one repo share SHAs, but the files a
+// commit lists carry the prefix of the checkout they were read from.
+const cacheKey = sha => commitKey(activeRepo(), sha);
 
 export function loadCommitFiles(sha) {
   const key = cacheKey(sha);

@@ -52,8 +52,19 @@ export function syncUnpushedVisibility() {
    head SHA together say whether anything actually moved -- the section is
    rebuilt only when they did, so the SSE stream doesn't shell out to git log
    on every heartbeat. Call with nothing to force a refetch. */
+// The checkout the cached lists were read from: worktrees of one repo share
+// SHAs, but a commit's files carry the prefix of the checkout that listed them.
+let upRepo = '';
+
 export async function refreshUnpushed(payload) {
   if (!S.meta?.git) return;
+  if (isWorkspace() && activeRepo() !== upRepo) {
+    upRepo = activeRepo();
+    upFiles.clear();
+    upDetails.clear();
+    upOpenSha = '';
+    upSig = '';
+  }
   if (isWorkspace() && !activeRepo()) {
     upList = [];
     S.unpushedCount = 0;

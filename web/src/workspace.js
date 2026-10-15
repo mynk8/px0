@@ -4,6 +4,7 @@
 // folders, filtered by view: the working set (a coding agent runs there, or it
 // was added with `px0 set add`), checkouts with changes, or all of them.
 import { $, S, esc, api } from './state.js';
+import { visibleCheckouts, rootKey } from './workspace-view.js';
 
 S.repos = [];
 S.scope = new URLSearchParams(location.search).get('scope') || '';
@@ -37,7 +38,7 @@ export const withRepo = path => {
   return r ? path + (path.includes('?') ? '&' : '?') + 'repo=' + encodeURIComponent(r) : path;
 };
 
-let sig = '';
+let layoutKey = '';
 let redraw = null; // tree.js hands its refresh in, to avoid an import cycle
 const listeners = [];
 export function setRedraw(fn) { redraw = fn; }
@@ -51,11 +52,27 @@ export async function loadRepos() {
 export function onRepos(repos) {
   if (!repos) return;
   S.repos = repos;
-  const next = JSON.stringify(repos.map(r => [r.path, r.branch, r.head, r.changes, r.ahead, r.agent, r.inSet, r.note]));
-  if (next !== sig) {
-    sig = next;
-    if (!S.scope) redraw?.();
-    renderScopeBar();
+  renderScopeBar();
+  if (S.scope) return;
+  const next = rootKey(repos, S.wsView);
+  if (next !== layoutKey) redraw?.(); // drawWorkspaceRoot records the new key
+  else patchCheckoutRows();
+}
+
+// Updates the branch, note and counts of listed checkout rows in place,
+// leaving their open folders, selection and the scroll position alone.
+function patchCheckoutRows() {
+  const tree = $('#tree');
+  if (!tree) return;
+  const tmp = document.createElement('div');
+  for (const r of S.repos) {
+    const row = tree.querySelector('.tr.ws-co[data-dir="' + CSS.escape(r.path) + '"]');
+    if (!row) continue;
+    tmp.innerHTML = checkoutRow(r, 0);
+    const fresh = tmp.querySelector('.tr');
+    row.innerHTML = fresh.innerHTML;
+    row.title = fresh.title;
+    row.classList.toggle('dirty', fresh.classList.contains('dirty'));
   }
 }
 
@@ -72,16 +89,6 @@ export function setScope(prefix) {
   renderScopeBar();
   redraw?.();
   for (const fn of listeners) fn(S.scope);
-}
-
-function visible(r) {
-  const busy = r.changes > 0 || r.ahead > 0;
-  if (S.wsView === 'all') return true;
-  if (S.wsView === 'changes') return busy;
-  // An empty working set falls back to checkouts with uncommitted changes:
-  // "ahead" alone is too common (branches tracking their own remote copy).
-  const anySet = S.repos.some(x => x.agent || x.inSet);
-  return anySet ? (r.agent || r.inSet) : r.changes > 0;
 }
 
 // Under its group, a worktree drops the repeated group name ("sontaran-x" -> "x").
@@ -110,7 +117,8 @@ function checkoutRow(r, depth) {
 }
 
 export async function drawWorkspaceRoot(container) {
-  const shown = S.repos.filter(visible);
+  layoutKey = rootKey(S.repos, S.wsView);
+  const shown = visibleCheckouts(S.repos, S.wsView);
   const groups = new Map();
   for (const r of shown) {
     const g = r.main ? r.path : (r.group || r.path);

@@ -183,6 +183,13 @@ initPRScope();
           clearInterval(timer);
           S.meta = m;
           updateStatus();
+          if (S.meta.workspace) {
+            // Workspace mode is only known once the index has found the
+            // checkouts: load them and draw the grouped (or scoped) root.
+            await loadRepos();
+            renderScopeBar();
+            await refreshTree();
+          }
           if (!initialPath) {
             hasGitChanges = await applyGitSidebarState();
             if (hasGitChanges) await selectChangedFileTab();
