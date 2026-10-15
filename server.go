@@ -866,7 +866,8 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"indexMs":     ms,
 		"builtAt":     at,
 		"ready":       s.ix.Ready(),
-		"git":         gitAvailable(s.ix.Root()),
+		"git":         s.ix.GitOn(),
+		"workspace":   s.ix.Workspace(),
 		"gitChanges":  gitCount,
 		"gitFiles":    gitFiles,
 		"githubToken": githubToken != "",
@@ -1175,19 +1176,10 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	st, err := os.Stat(abs)
 	if err != nil {
-		if os.IsNotExist(err) && gitAvailable(s.ix.Root()) {
-			diffAvail := false
+		if os.IsNotExist(err) {
 			// A file a local commit deleted has nothing on disk, so the normal
 			// working-tree check below can't vouch for it. Its commit diff can.
-			if ref := q.Get("ref"); ref != "" {
-				diffAvail = gitDiffCommit(s.ix.Root(), rel, ref) != ""
-			} else if s.pr != nil {
-				diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != "" ||
-					gitDiffBetween(s.ix.Root(), rel, s.diffBase, s.prHeadSHA) != "" ||
-					gitDiffAgainst(s.ix.Root(), rel, s.prHeadSHA) != ""
-			} else {
-				diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != ""
-			}
+			diffAvail := s.diffAvailable(rel, q.Get("ref"))
 			if diffAvail {
 				d := newDoc("", rel)
 				if uiVerbose {
@@ -1238,20 +1230,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	lines, exact := d.Lines(start, start+count)
 	_, coming := d.Exact()
-	diffAvail := false
-	if gitAvailable(s.ix.Root()) {
-		if ref := q.Get("ref"); ref != "" {
-			// Pinned to one commit: what matters is whether that commit touched
-			// the file, not whether the working tree has since diverged.
-			diffAvail = gitDiffCommit(s.ix.Root(), rel, ref) != ""
-		} else if s.pr != nil {
-			diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != "" ||
-				gitDiffBetween(s.ix.Root(), rel, s.diffBase, s.prHeadSHA) != "" ||
-				gitDiffAgainst(s.ix.Root(), rel, s.prHeadSHA) != ""
-		} else {
-			diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != ""
-		}
-	}
+	diffAvail := s.diffAvailable(rel, q.Get("ref"))
 	writeJSON(w, map[string]any{
 		"path": rel, "lang": d.Lang, "total": d.Total, "maxCols": d.MaxCols,
 		"start": start, "lines": lines, "size": st.Size(),
@@ -1321,6 +1300,41 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 // since checkout). Committing in that session only ever changes yourDiff, so
 // the frontend can label the two apart instead of showing one blended diff
 // that looks the same whether or not the reviewer has touched anything.
+// gitFor resolves the repo a per-file git call runs in. In a single repo that
+// is the root, unchanged. In workspace mode it is the checkout owning rel; a
+// path outside every checkout has no git (ok false).
+func (s *Server) gitFor(rel string) (root, repoRel, base string, ok bool) {
+	if !s.ix.Workspace() {
+		return s.ix.Root(), rel, s.diffBase, gitAvailable(s.ix.Root())
+	}
+	c, rr, found := s.ix.RepoFor(rel)
+	if !found {
+		return "", "", "", false
+	}
+	return c.Abs, rr, s.ix.RepoBase(c.Prefix), true
+}
+
+// diffAvailable reports whether rel has a diff to show: against one commit
+// when ref is set, else against the diff base (and, in a PR review, the PR's
+// own and the reviewer's changes).
+func (s *Server) diffAvailable(rel, ref string) bool {
+	groot, grel, gbase, ok := s.gitFor(rel)
+	if !ok {
+		return false
+	}
+	if ref != "" {
+		// Pinned to one commit: what matters is whether that commit touched
+		// the file, not whether the working tree has since diverged.
+		return gitDiffCommit(groot, grel, ref) != ""
+	}
+	if s.pr != nil {
+		return gitDiffAgainst(groot, grel, gbase) != "" ||
+			gitDiffBetween(groot, grel, gbase, s.prHeadSHA) != "" ||
+			gitDiffAgainst(groot, grel, s.prHeadSHA) != ""
+	}
+	return gitDiffAgainst(groot, grel, gbase) != ""
+}
+
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	_, rel, ok := s.resolvePath(r.URL.Query().Get("path"))
 	if !ok {
@@ -1330,8 +1344,13 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	// A ref names one local commit to read instead of the working tree: the
 	// diff that commit itself made to this file, frozen regardless of what has
 	// been edited since. Empty ref -> today's working-tree-vs-diffBase diff.
+	groot, grel, gbase, gok := s.gitFor(rel)
+	if !gok {
+		writeJSON(w, map[string]any{"path": rel, "diff": "", "hunks": highlightDiff(rel, ""), "available": false})
+		return
+	}
 	if ref := r.URL.Query().Get("ref"); ref != "" {
-		diff := gitDiffCommit(s.ix.Root(), rel, ref)
+		diff := gitDiffCommit(groot, grel, ref)
 		writeJSON(w, map[string]any{
 			"path":      rel,
 			"ref":       ref,
@@ -1341,7 +1360,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	diff := gitDiffAgainst(s.ix.Root(), rel, s.diffBase)
+	diff := gitDiffAgainst(groot, grel, gbase)
 	if uiVerbose {
 		status := "clean"
 		if diff != "" {
@@ -1357,8 +1376,8 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		"hunks": highlightDiff(rel, diff),
 	}
 	if s.pr != nil {
-		prDiff := gitDiffBetween(s.ix.Root(), rel, s.diffBase, s.prHeadSHA)
-		yourDiff := gitDiffAgainst(s.ix.Root(), rel, s.prHeadSHA)
+		prDiff := gitDiffBetween(groot, grel, gbase, s.prHeadSHA)
+		yourDiff := gitDiffAgainst(groot, grel, s.prHeadSHA)
 		resp["prDiff"] = prDiff
 		resp["yourDiff"] = yourDiff
 		resp["prHunks"] = highlightDiff(rel, prDiff)
@@ -1379,10 +1398,12 @@ func (s *Server) handleGutter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var added, modified, deleted []int
-	if ref := r.URL.Query().Get("ref"); ref != "" {
-		added, modified, deleted = gitHunksCommit(s.ix.Root(), rel, ref)
+	if groot, grel, gbase, gok := s.gitFor(rel); !gok {
+		// outside every checkout: no gutter
+	} else if ref := r.URL.Query().Get("ref"); ref != "" {
+		added, modified, deleted = gitHunksCommit(groot, grel, ref)
 	} else {
-		added, modified, deleted = gitHunksAgainst(s.ix.Root(), rel, s.diffBase)
+		added, modified, deleted = gitHunksAgainst(groot, grel, gbase)
 	}
 	nz := func(v []int) []int { // marshal as [] not null
 		if v == nil {
@@ -1488,7 +1509,7 @@ func (s *Server) handleGitRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	count, files := s.ix.GitChanges()
 	writeJSON(w, map[string]any{
-		"git":        gitAvailable(s.ix.Root()),
+		"git":        s.ix.GitOn(),
 		"gitChanges": count,
 		"gitFiles":   files,
 		"statuses":   s.ix.GitStatusMap(),
@@ -1520,7 +1541,12 @@ func (s *Server) handleGitStage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := gitStage(s.ix.Root(), rel); err != nil {
+	groot, grel, _, gok := s.gitFor(rel)
+	if !gok {
+		fail(w, http.StatusBadRequest, "not inside a git checkout")
+		return
+	}
+	if err := gitStage(groot, grel); err != nil {
 		fail(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -1540,7 +1566,12 @@ func (s *Server) handleGitUnstage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := gitUnstage(s.ix.Root(), rel); err != nil {
+	groot, grel, _, gok := s.gitFor(rel)
+	if !gok {
+		fail(w, http.StatusBadRequest, "not inside a git checkout")
+		return
+	}
+	if err := gitUnstage(groot, grel); err != nil {
 		fail(w, http.StatusBadGateway, err.Error())
 		return
 	}

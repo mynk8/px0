@@ -136,3 +136,40 @@ func TestWorkspaceStatusMerged(t *testing.T) {
 		t.Errorf("after partial refresh: %v", st)
 	}
 }
+
+func TestWorkspaceFileDiffGutterStage(t *testing.T) {
+	root := workspaceFixture(t)
+	os.WriteFile(filepath.Join(root, "alpha/sub/s.go"), []byte("s2\n"), 0o644)
+	ix := NewIndex(root)
+	ix.Build()
+	s := NewServer(ix, nil)
+
+	if code, m := get(t, s, "/api/meta"); code != 200 || m["git"] != true || m["workspace"] != true {
+		t.Fatalf("meta: %d %v", code, m)
+	}
+	if _, m := get(t, s, "/api/file?path=alpha/sub/s.go"); m["diffAvailable"] != true {
+		t.Fatalf("diffAvailable: %v", m)
+	}
+	if _, m := get(t, s, "/api/diff?path=alpha/sub/s.go"); m["available"] != true || !strings.Contains(m["diff"].(string), "+s2") {
+		t.Fatalf("diff: %v", m)
+	}
+	if _, m := get(t, s, "/api/gutter?path=alpha/sub/s.go"); m["available"] != true {
+		t.Fatalf("gutter: %v", m)
+	}
+	// Outside every checkout: opens, no diff, never 500.
+	if code, m := get(t, s, "/api/file?path=docs/notes.md"); code != 200 || m["diffAvailable"] == true {
+		t.Fatalf("plain file: %d %v", code, m)
+	}
+	if code, m := get(t, s, "/api/diff?path=docs/notes.md"); code != 200 || m["available"] == true {
+		t.Fatalf("plain diff: %d %v", code, m)
+	}
+	if code, _ := agentPostJSON(t, s, "/api/git/stage", map[string]string{"path": "alpha/sub/s.go"}); code != 200 {
+		t.Fatalf("stage: %d", code)
+	}
+	if out := gitTestRun(t, filepath.Join(root, "alpha"), "diff", "--cached", "--name-only"); strings.TrimSpace(out) != "sub/s.go" {
+		t.Fatalf("staged in alpha = %q", out)
+	}
+	if code, _ := agentPostJSON(t, s, "/api/git/unstage", map[string]string{"path": "alpha/sub/s.go"}); code != 200 {
+		t.Fatalf("unstage: %d", code)
+	}
+}
