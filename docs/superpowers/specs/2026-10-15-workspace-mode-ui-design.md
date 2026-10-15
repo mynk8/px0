@@ -11,6 +11,21 @@ Review and iterate in one place: see what changed across every repo and
 worktree, read it as stacked layers, and hand fixes to the coding agent,
 without switching between the PR page, an editor, the terminal and the agent.
 
+## v1 scope: one tool that works well enough
+
+Build first, in this order; everything else waits until v1 is in daily use:
+
+1. Part 1 git core.
+2. Explorer grouped by repo and worktree, with the Changes / All toggle (§2).
+3. Scope to a checkout by clicking its row: tree, file search, text search, git
+   panel (§3, without the palette prefix).
+4. "This branch" diff toggle (§4), with parent inference rules 1 and 3 only:
+   the tracked feature branch, else trunk.
+5. Agent runs in the owning checkout (§5).
+
+Deferred: the stack section in the git panel, `needs restack`, the
+nearest-ancestor parent rule, and the `#` palette prefix.
+
 ## Principles
 
 - Stay inside px0's existing design. Reuse its tree rows, badges, colours,
