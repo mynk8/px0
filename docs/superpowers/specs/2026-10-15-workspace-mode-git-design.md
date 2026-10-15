@@ -1,8 +1,8 @@
 # Workspace mode: git across many repos
 
 Date: 2026-10-15
-Status: draft for review
-Part 1 of 3 (2: workspace UI, 3: GitHub PR client — separate specs)
+Status: approved 2026-10-15
+Part 1 of 2 (part 2: workspace UI, separate spec). GitHub integration is out of scope.
 
 ## Problem
 
@@ -28,7 +28,7 @@ gutter markers, commit history and commit diffs, stage/unstage.
   as today.
 - No new UI beyond what is needed for whole-repo actions to name their repo
   (repo grouping and switching is part 2).
-- No GitHub features (part 3).
+- No new GitHub features.
 
 ## Activation
 
