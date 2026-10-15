@@ -483,3 +483,25 @@ func TestStatusDoesNotWriteIndex(t *testing.T) {
 		t.Fatal("git status rewrote the index; it must run without optional locks")
 	}
 }
+
+// The worktree tick catches file edits; identity (branch, head, ahead) only
+// moves with git metadata, which the 1 s poll watches, so the tick must not
+// re-run identity for every checkout each time.
+func TestWorktreeTickSkipsIdentity(t *testing.T) {
+	root := workspaceFixture(t)
+	ix := NewIndex(root)
+	ix.Build()
+	gw := NewGitWatcher(ix)
+	gw.Refresh()
+	os.WriteFile(filepath.Join(root, "beta/b.go"), []byte("edited\n"), 0o644)
+	before := identityRuns.Load()
+	gw.worktreeTick()
+	if n := identityRuns.Load() - before; n != 0 {
+		t.Fatalf("worktree tick recomputed identity %d times, want 0", n)
+	}
+	for _, r := range gw.RepoStates() {
+		if r.Path == "beta" && r.Changes != 1 {
+			t.Fatalf("tick missed the edit: beta = %+v", r)
+		}
+	}
+}

@@ -60,14 +60,15 @@ type GitWatcher struct {
 	lastBehind     int
 
 	// Workspace mode: one metadata stamp and one state per checkout.
-	stMu       sync.Mutex
-	metas      map[string]checkoutMeta
-	commonDirs map[string]string
-	states     map[string]RepoState
-	setMod     time.Time // working-set file mtime at the last load
-	setLoaded  bool
-	setItems   map[string]string // absolute checkout path -> note
-	agents     map[string]bool   // checkout prefix -> a coding agent runs there
+	stMu         sync.Mutex
+	metas        map[string]checkoutMeta
+	commonDirs   map[string]string
+	states       map[string]RepoState
+	setMod       time.Time // working-set file mtime at the last load
+	setLoaded    bool
+	setItems     map[string]string // absolute checkout path -> note
+	agents       map[string]bool   // checkout prefix -> a coding agent runs there
+	lastIdentity time.Time         // last identity recompute for every checkout
 }
 
 // checkoutMeta is what a checkout's git metadata looked like at the last poll.
@@ -212,7 +213,7 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 			// Worktree path: check for modifications in files outside git CLI.
 			// Only run when at least one client is actively listening.
 			if gw.active.Load() > 0 {
-				dur := gw.checkAndBroadcast()
+				dur := gw.worktreeTick()
 				// Adapt interval based on execution speed: min 1s, max 10s.
 				newInterval := dur * 5
 				if newInterval < 1*time.Second {
@@ -256,9 +257,42 @@ func (gw *GitWatcher) Refresh() GitStatusPayload {
 // refreshFor is Refresh limited, in workspace mode, to the named checkouts
 // (nil: all). Other checkouts keep their cached status and identity.
 func (gw *GitWatcher) refreshFor(prefixes []string) GitStatusPayload {
+	return gw.refresh(prefixes, prefixes)
+}
+
+// worktreeTick is the periodic catch-all for edits git metadata does not show.
+// In workspace mode it re-runs status everywhere but recomputes identity
+// (branch, head, ahead/behind: several git calls per checkout) only once a
+// minute, for pushes and fetches the metadata poll does not see.
+func (gw *GitWatcher) worktreeTick() time.Duration {
+	start := time.Now()
+	if !gw.ix.Workspace() {
+		gw.Refresh()
+		return time.Since(start)
+	}
+	var identity []string // nil: all
+	gw.stMu.Lock()
+	recent := time.Since(gw.lastIdentity) < time.Minute
+	gw.stMu.Unlock()
+	if recent {
+		identity = []string{}
+	}
+	gw.refresh(nil, identity)
+	return time.Since(start)
+}
+
+// refresh re-runs status for statusFor and identity for identityFor (nil: all;
+// empty: none), then broadcasts when anything changed.
+func (gw *GitWatcher) refresh(statusFor, identityFor []string) GitStatusPayload {
+	prefixes := statusFor
 	count, files, changed, statuses, dirtyDirs, staged, yourStatuses, yourDirtyDirs := gw.ix.UpdateGitStatusFor(prefixes)
 	if gw.ix.Workspace() {
-		if gw.updateStates(prefixes) {
+		if identityFor == nil {
+			gw.stMu.Lock()
+			gw.lastIdentity = time.Now()
+			gw.stMu.Unlock()
+		}
+		if gw.updateStates(identityFor) {
 			changed = true
 		}
 		payload := GitStatusPayload{

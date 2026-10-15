@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Workspace mode: the opened folder is not a git repo but holds many
@@ -310,9 +311,13 @@ type RepoState struct {
 	Note    string `json:"note,omitempty"`   // working-set note
 }
 
+// identityRuns counts repoIdentity calls: each costs several git processes.
+var identityRuns atomic.Int64
+
 // repoIdentity fills the parts of a RepoState that only change when refs or
 // HEAD move: group, branch, head, ahead/behind.
 func repoIdentity(wsRoot string, c checkout) RepoState {
+	identityRuns.Add(1)
 	st := RepoState{Path: c.Prefix, Mode: "head"}
 	if cd := gitCommonDir(c.Abs); cd != "" {
 		main := filepath.Dir(cd)
