@@ -4,8 +4,10 @@
 // side-by-side split layout (default) or a single-column unified layout.
 // Unlike the code viewport this is not virtualized -- a file's own diff is
 // bounded in size, so a plain DOM render is simple and fast enough.
-import { $, S, doc_, esc, api, MOD } from './state.js';
+import { repoOf, loadRepos } from './workspace.js';
+import { $, S, doc_, esc, api, apiPost, MOD } from './state.js';
 import { on } from './bus.js';
+import { showToast } from './ui.js';
 import { syncPreview } from './markdown.js';
 import { setStatusNote, updateStatus } from './status.js';
 import { wordAtPoint } from './cursor.js';
@@ -602,7 +604,24 @@ export function initDiff() {
   });
   const menu = $('#diff-menu');
   if (menu) {
-    menu.addEventListener('click', e => {
+    menu.addEventListener('click', async e => {
+      const base = e.target.closest('[data-diff-base]');
+      if (base) {
+        e.stopPropagation();
+        base.blur();
+        const d = doc_();
+        const repo = d?.path ? repoOf(d.path) : '';
+        if (!repo) return;
+        try {
+          await apiPost('/api/git/base', { repo, mode: base.dataset.diffBase });
+          await loadRepos();
+          syncDiffView(true);
+          updateStatus();
+        } catch (err) {
+          showToast('!', err.message || 'Could not change what this checkout is compared against');
+        }
+        return;
+      }
       const item = e.target.closest('[data-diff-opt]');
       if (!item) return;
       e.stopPropagation();

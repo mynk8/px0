@@ -181,6 +181,21 @@
               <span class="diff-item-desc">Inline unified</span>
             </div>
           </button>
+          <div class="diff-menu-header ws-base" hidden>Compare Against</div>
+          <button type="button" class="diff-menu-item ws-base" data-diff-base="head" role="menuitem" title="Uncommitted changes: the working tree against HEAD" hidden>
+            <span class="diff-item-check" aria-hidden="true">✓</span>
+            <div class="diff-item-content">
+              <span class="diff-item-title">Uncommitted</span>
+              <span class="diff-item-desc">Working tree against HEAD</span>
+            </div>
+          </button>
+          <button type="button" class="diff-menu-item ws-base" data-diff-base="branch" role="menuitem" title="This branch: everything since its parent branch, committed or not" hidden>
+            <span class="diff-item-check" aria-hidden="true">✓</span>
+            <div class="diff-item-content">
+              <span class="diff-item-title">This branch</span>
+              <span class="diff-item-desc" id="ws-base-desc">Against its parent branch</span>
+            </div>
+          </button>
         </div>
         </div>
       </div>

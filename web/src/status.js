@@ -1,3 +1,4 @@
+import { isWorkspace, repoOf, repoState } from './workspace.js';
 import { $, S, doc_, api, apiPost, esc, withKeys } from './state.js';
 import { previewing, previewKind } from './markdown.js';
 import { layoutPref } from './diff.js';
@@ -66,8 +67,17 @@ export function updateStatus() {
       srcBtn.title = withKeys('Show the file ({Mod+D})');
     }
     const menuItems = dsw.querySelectorAll('.diff-menu-item');
+    const st = isWorkspace() && d?.path ? repoState(repoOf(d.path)) : null;
     for (const item of menuItems) {
-      item.classList.toggle('active', item.dataset.diffOpt === currentLayout);
+      item.classList.toggle('active', item.dataset.diffBase
+        ? item.dataset.diffBase === (st?.mode || 'head')
+        : item.dataset.diffOpt === currentLayout);
+    }
+    for (const el of dsw.querySelectorAll('.ws-base')) el.hidden = !st;
+    const desc = $('#ws-base-desc');
+    if (desc) desc.textContent = st?.parent ? 'Against ' + st.parent : 'Against its parent branch';
+    if (btn && hasDiff && st?.mode === 'branch') {
+      btn.title = withKeys(`Show this branch's changes against ${st.parent || 'its parent'} ({Mod+D})`);
     }
   }
 
