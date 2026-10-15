@@ -49,7 +49,7 @@ func main() {
 		basePathFlag = flag.String("base-path", "", "base URL path prefix to serve endpoints and assets from (e.g. /rev-123/)")
 	)
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "px0 %s - a code navigator\n\nusage:\n  px0 [flags] [file or directory]\n  px0 [flags] <pr-url>\n\nflags:\n", version)
+		fmt.Fprintf(os.Stderr, "px0 %s - a code navigator\n\nusage:\n  px0 [flags] [file or directory]\n  px0 [flags] <pr-url>\n  px0 set add|remove|list|clear [path] [-note text]\n\nflags:\n", version)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -75,6 +75,13 @@ func main() {
 
 	if *doUpdate {
 		if err := runSelfUpdate(version); err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	if flag.NArg() > 0 && flag.Arg(0) == "set" {
+		if err := runSetCmd(flag.Args()[1:], os.Stdout); err != nil {
 			fatal(err)
 		}
 		return

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -298,5 +300,81 @@ func TestParentRefTracksFeatureBranch(t *testing.T) {
 	}
 	if got := parentRef(a, "feat"); got != "main" {
 		t.Fatalf("trunk fallback = %q, want main", got)
+	}
+}
+
+func TestSetCommand(t *testing.T) {
+	root := workspaceFixture(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var buf bytes.Buffer
+	// From a subfolder: the checkout top level is stored.
+	if err := runSetCmd([]string{"add", filepath.Join(root, "alpha/sub"), "-note", "review filter"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	ws := readSet()
+	if len(ws.Items) != 1 || ws.Items[0].Path != filepath.Join(root, "alpha") || ws.Items[0].Note != "review filter" {
+		t.Fatalf("set = %+v", ws)
+	}
+	// Adding again updates the note, no duplicate; -note may come first.
+	if err := runSetCmd([]string{"add", "-note", "v2", filepath.Join(root, "alpha")}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if ws = readSet(); len(ws.Items) != 1 || ws.Items[0].Note != "v2" {
+		t.Fatalf("re-add = %+v", ws)
+	}
+	if err := runSetCmd([]string{"add", filepath.Join(root, "docs")}, &buf); err == nil {
+		t.Fatal("adding a non-checkout should fail")
+	}
+	buf.Reset()
+	runSetCmd([]string{"list"}, &buf)
+	if !strings.Contains(buf.String(), filepath.Join(root, "alpha")+"\tv2") {
+		t.Fatalf("list = %q", buf.String())
+	}
+	runSetCmd([]string{"remove", filepath.Join(root, "alpha")}, &buf)
+	if len(readSet().Items) != 0 {
+		t.Fatal("remove failed")
+	}
+}
+
+func TestAgentNameFromCmdline(t *testing.T) {
+	cases := map[string]string{
+		"/home/u/.local/bin/claude\x00-p\x00hi\x00":                    "claude",
+		"node\x00/usr/lib/node_modules/@openai/codex/bin/codex.js\x00": "codex",
+		"codex\x00exec\x00":        "codex",
+		"/usr/bin/vim\x00file\x00": "",
+		"bash\x00-c\x00claude\x00": "",
+	}
+	for in, want := range cases {
+		if got := agentNameFromCmdline([]byte(in)); got != want {
+			t.Errorf("agentNameFromCmdline(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRepoStatesCarrySetAndNote(t *testing.T) {
+	root := workspaceFixture(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runSetCmd([]string{"add", filepath.Join(root, "beta"), "-note", "wip"}, io.Discard)
+	ix := NewIndex(root)
+	ix.Build()
+	gw := NewGitWatcher(ix)
+	gw.Refresh()
+	for _, r := range gw.RepoStates() {
+		if r.Path == "beta" && (!r.InSet || r.Note != "wip") {
+			t.Fatalf("beta = %+v", r)
+		}
+		if r.Path == "alpha" && r.InSet {
+			t.Fatal("alpha should not be in the set")
+		}
+	}
+	// A change to the set file is picked up by the poll.
+	runSetCmd([]string{"add", filepath.Join(root, "alpha")}, io.Discard)
+	if !gw.pollSet() {
+		t.Fatal("pollSet did not see the new item")
+	}
+	for _, r := range gw.RepoStates() {
+		if r.Path == "alpha" && !r.InSet {
+			t.Fatal("alpha should now be in the set")
+		}
 	}
 }

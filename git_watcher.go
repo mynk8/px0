@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -63,6 +64,10 @@ type GitWatcher struct {
 	metas      map[string]checkoutMeta
 	commonDirs map[string]string
 	states     map[string]RepoState
+	setMod     time.Time // working-set file mtime at the last load
+	setLoaded  bool
+	setItems   map[string]string // absolute checkout path -> note
+	agents     map[string]bool   // checkout prefix -> a coding agent runs there
 }
 
 // checkoutMeta is what a checkout's git metadata looked like at the last poll.
@@ -96,6 +101,7 @@ func (gw *GitWatcher) Start(ctx context.Context) {
 	}
 	if gw.ix.Workspace() {
 		gw.scanCheckoutMeta()
+		gw.pollAgents()
 		go gw.loop(ctx, "")
 		return
 	}
@@ -167,6 +173,9 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 	heartbeatTicker := time.NewTicker(15 * time.Second)
 	defer heartbeatTicker.Stop()
 
+	agentTicker := time.NewTicker(5 * time.Second)
+	defer agentTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -181,6 +190,7 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 				if changed := gw.scanCheckoutMeta(); len(changed) > 0 {
 					gw.refreshFor(changed)
 				}
+				gw.pollSet()
 			} else if gw.recordGitMeta(gitdir) {
 				gw.checkAndBroadcast()
 			}
@@ -212,6 +222,11 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 			default:
 			}
 			gw.checkAndBroadcast()
+
+		case <-agentTicker.C:
+			if gw.active.Load() > 0 {
+				gw.pollAgents()
+			}
 
 		case <-heartbeatTicker.C:
 			gw.broadcast([]byte(": ping\n\n"))
@@ -297,6 +312,7 @@ func (gw *GitWatcher) broadcastPayload(payload GitStatusPayload) {
 // the named checkouts (nil: all) and every checkout's counts. Reports whether
 // any state changed.
 func (gw *GitWatcher) updateStates(prefixes []string) bool {
+	gw.loadSet()
 	cos := gw.ix.Checkouts()
 	todo := cos
 	if prefixes != nil {
@@ -341,6 +357,8 @@ func (gw *GitWatcher) updateStates(prefixes []string) bool {
 	for p, st := range next {
 		st.Changes, st.Staged = gw.ix.CheckoutCounts(p)
 		st.Mode, st.Parent = gw.ix.RepoMode(p)
+		st.Note, st.InSet = gw.setItems[filepath.Join(gw.root, filepath.FromSlash(p))]
+		st.Agent = gw.agents[p]
 		next[p] = st
 		if gw.states[p] != st {
 			changed = true
@@ -351,6 +369,78 @@ func (gw *GitWatcher) updateStates(prefixes []string) bool {
 	}
 	gw.states = next
 	return changed
+}
+
+// loadSet reloads the working set when its file changed. Reports whether it did.
+func (gw *GitWatcher) loadSet() bool {
+	var mod time.Time
+	if fi, err := os.Stat(setFilePath()); err == nil {
+		mod = fi.ModTime()
+	}
+	gw.stMu.Lock()
+	defer gw.stMu.Unlock()
+	if gw.setLoaded && mod.Equal(gw.setMod) {
+		return false
+	}
+	gw.setMod, gw.setLoaded = mod, true
+	gw.setItems = map[string]string{}
+	for _, it := range readSet().Items {
+		gw.setItems[filepath.Clean(it.Path)] = it.Note
+	}
+	return true
+}
+
+// pollSet picks up working-set edits (px0 set add/remove) and broadcasts
+// when a checkout's set membership or note changed.
+func (gw *GitWatcher) pollSet() bool {
+	if !gw.ix.Workspace() || !gw.loadSet() {
+		return false
+	}
+	return gw.overlayChanged()
+}
+
+// pollAgents rescans running coding agents and broadcasts when the set of
+// checkouts they work in changed.
+func (gw *GitWatcher) pollAgents() bool {
+	if !gw.ix.Workspace() {
+		return false
+	}
+	found := agentCheckouts(gw.root, gw.ix.Checkouts())
+	gw.stMu.Lock()
+	same := len(found) == len(gw.agents)
+	for p := range found {
+		if !gw.agents[p] {
+			same = false
+		}
+	}
+	gw.agents = found
+	gw.stMu.Unlock()
+	if same {
+		return false
+	}
+	return gw.overlayChanged()
+}
+
+// overlayChanged re-applies set and agent fields to the cached states without
+// running git, broadcasting the current payload when any state changed.
+func (gw *GitWatcher) overlayChanged() bool {
+	if !gw.updateStates([]string{}) {
+		return false
+	}
+	count, files := gw.ix.GitChanges()
+	statuses := gw.ix.GitStatusMap()
+	dirty := map[string]bool{}
+	for p := range statuses {
+		for i := strings.LastIndexByte(p, '/'); i >= 0; i = strings.LastIndexByte(p, '/') {
+			p = p[:i]
+			dirty[p] = true
+		}
+	}
+	gw.broadcastPayload(GitStatusPayload{
+		Git: true, GitChanges: count, GitFiles: files, Statuses: statuses, DirtyDirs: dirty,
+		Staged: gw.ix.GitStagedMap(), Workspace: true, Repos: gw.RepoStates(),
+	})
+	return true
 }
 
 // RepoStates lists every checkout's state: grouped by repo, the main
