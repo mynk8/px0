@@ -881,6 +881,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"agent":       s.agent.Name(),
 		"agentModel":  s.agent.Model(),
 		"agentPinned": s.agent.Pinned(),
+		"noAgent":     s.agent == nil,
 		"agents":      []agentHarness{},
 	}
 	if s.pr != nil {

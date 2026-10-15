@@ -1,0 +1,27 @@
+/* Oxocarbon (nyoom-engineering): IBM Carbon's greys with blue, pink and
+   purple accents. Token reference: docs/internals/styling-and-themes.md. */
+:root[data-theme="oxocarbon"] {
+  --theme-name: "Oxocarbon";
+  color-scheme: dark;
+
+  /* surfaces, from the editor out to raised hover states */
+  --bg: #161616; --bg2: #131313; --bg3: #262626; --bg4: #393939;
+  /* text: primary, secondary, tertiary */
+  --fg: #f2f4f8; --dim: #dde1e6; --faint: #6f6f6f;
+  /* borders and accent */
+  --line: #262626; --accent: #78a9ff; --accent-fg: #33b1ff;
+  /* selection, search matches, current line */
+  --sel: #393939; --mark: rgba(190, 149, 255, 0.28); --mark-active: #ff7eb6; --cur: #1c1c1c;
+  /* elevation */
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.85);
+
+  /* syntax */
+  --k: #78a9ff; --kt: #08bdba; --nf: #ff7eb6; --nc: #08bdba; --nb: #3ddbd9;
+  --nv: #f2f4f8; --no: #82cfff; --na: #be95ff; --nt: #33b1ff; --nd: #ee5396;
+  --np: #dde1e6; --s: #be95ff; --m: #82cfff; --o: #78a9ff; --p: #a8a8a8;
+  --c: #6f6f6f; --cp: #ee5396; --err: #ee5396;
+
+  /* diffs and status */
+  --gi: #42be65; --gd: #ee5396;
+  --gi-bg: rgba(66, 190, 101, 0.16); --gd-bg: rgba(238, 83, 150, 0.16);
+}

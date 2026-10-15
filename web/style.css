@@ -3036,3 +3036,9 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 .tr .ws-up { color: var(--gi); }
 .tr.ws-co.ws-detached .ws-br { color: var(--gd); opacity: .8; }
 .tr .ws-agent { background: var(--sel); }
+
+/* Viewer mode (-no-agent): commit by hand only; no harness picker or AI links. */
+body.no-agent .git-agent-picker,
+body.no-agent #git-generate-link,
+body.no-agent #git-instructions-link,
+body.no-agent .git-instructions-wrap .git-link-sep { display: none !important; }

@@ -1,0 +1,27 @@
+/* Xcode Default (Light): Xcode's own source editor colours on macOS light
+   surfaces. Token reference: docs/internals/styling-and-themes.md. */
+:root[data-theme="xcode-light"] {
+  --theme-name: "Xcode Light";
+  color-scheme: light;
+
+  /* surfaces, from the editor out to raised hover states */
+  --bg: #ffffff; --bg2: #f5f5f7; --bg3: #ececee; --bg4: #e0e0e3;
+  /* text: primary, secondary, tertiary */
+  --fg: #262626; --dim: #5d6c79; --faint: #9a9aa0;
+  /* borders and accent */
+  --line: #dcdce0; --accent: #007aff; --accent-fg: #0b4f79;
+  /* selection, search matches, current line */
+  --sel: #a4cdff; --mark: rgba(255, 204, 0, 0.35); --mark-active: #ff9500; --cur: #ecf5ff;
+  /* elevation */
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+
+  /* syntax */
+  --k: #9b2393; --kt: #9b2393; --nf: #326d74; --nc: #0b4f79; --nb: #6c36a9;
+  --nv: #262626; --no: #3900a0; --na: #815f03; --nt: #0b4f79; --nd: #815f03;
+  --np: #262626; --s: #c41a16; --m: #1c00cf; --o: #262626; --p: #5d6c79;
+  --c: #5d6c79; --cp: #643820; --err: #d12f1b;
+
+  /* diffs and status */
+  --gi: #248a3d; --gd: #d70015;
+  --gi-bg: rgba(52, 199, 89, 0.14); --gd-bg: rgba(255, 59, 48, 0.12);
+}

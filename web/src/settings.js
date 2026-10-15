@@ -154,7 +154,8 @@ const BUILTIN_SCHEMA = [
       "github-dark", "dark", "light",
       "dracula", "gruvbox-dark", "gruvbox-light",
       "monokai", "nord", "one-dark", "rose-pine",
-      "solarized-dark", "solarized-light"
+      "solarized-dark", "solarized-light",
+      "oxocarbon", "xcode-dark", "xcode-light"
     ]
   },
   {

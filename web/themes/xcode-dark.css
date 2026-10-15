@@ -1,0 +1,27 @@
+/* Xcode Default (Dark): Xcode's own source editor colours on macOS dark
+   surfaces. Token reference: docs/internals/styling-and-themes.md. */
+:root[data-theme="xcode-dark"] {
+  --theme-name: "Xcode Dark";
+  color-scheme: dark;
+
+  /* surfaces, from the editor out to raised hover states */
+  --bg: #1f1f24; --bg2: #26262b; --bg3: #2d2d33; --bg4: #3a3a41;
+  /* text: primary, secondary, tertiary */
+  --fg: #dfdfe0; --dim: #a8a8ad; --faint: #6c7986;
+  /* borders and accent */
+  --line: #333338; --accent: #0a84ff; --accent-fg: #5dd8ff;
+  /* selection, search matches, current line */
+  --sel: #515b70; --mark: rgba(255, 214, 10, 0.25); --mark-active: #fd8f3f; --cur: #23252b;
+  /* elevation */
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
+
+  /* syntax */
+  --k: #fc5fa3; --kt: #fc5fa3; --nf: #67b7a4; --nc: #5dd8ff; --nb: #a167e6;
+  --nv: #dfdfe0; --no: #d0a8ff; --na: #bf8555; --nt: #5dd8ff; --nd: #bf8555;
+  --np: #dfdfe0; --s: #fc6a5d; --m: #d0bf69; --o: #dfdfe0; --p: #a8a8ad;
+  --c: #6c7986; --cp: #fd8f3f; --err: #ff453a;
+
+  /* diffs and status */
+  --gi: #32d74b; --gd: #ff453a;
+  --gi-bg: rgba(50, 215, 75, 0.14); --gd-bg: rgba(255, 69, 58, 0.14);
+}

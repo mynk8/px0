@@ -95,6 +95,8 @@ initPRScope();
   initPR();
   showRightInspector(); // the right sidebar starts open, on Threads when there is a harness
   document.title = S.meta.name + ' - px0';
+  // Run as a viewer (the fork's default): no AI controls anywhere.
+  document.body.classList.toggle('no-agent', !!S.meta.noAgent);
   $('#root-name').textContent = S.meta.name;
   $('#root-name').title = S.meta.root;
   if (S.meta.version) {
