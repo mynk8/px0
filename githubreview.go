@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // GitHub review in workspace mode: each checkout's branch is matched to its
@@ -141,4 +143,115 @@ func prNumberFor(ctx context.Context, token string, c checkout) (owner, repo str
 		return "", "", 0, errNoPR
 	}
 	return owner, repo, prs[0].Number, nil
+}
+
+// checkoutPRBinding is a checkout's pull request session, valid while the
+// checkout stays on the branch it was looked up for. A miss (no PR) is kept
+// briefly so switching files does not ask GitHub again and again.
+type checkoutPRBinding struct {
+	branch string
+	p      *prSession // nil: no PR for this branch
+	err    error
+	at     time.Time
+}
+
+const noPRRetry = time.Minute
+
+// prFor returns the review session a /api/pr/* request is about, and the
+// checkout prefix that maps its paths ("" in single-PR mode). In workspace
+// mode that is the PR of the checkout named by ?repo=.
+func (s *Server) prFor(w http.ResponseWriter, r *http.Request) (*prSession, string, bool) {
+	if s.pr != nil {
+		return s.pr, "", true
+	}
+	if !s.ix.Workspace() {
+		fail(w, http.StatusNotFound, "not a PR review session")
+		return nil, "", false
+	}
+	_, prefix, ok := s.repoRoot(w, r)
+	if !ok {
+		return nil, "", false
+	}
+	c, _ := s.ix.CheckoutByPrefix(prefix)
+	p, err := s.checkoutPR(r.Context(), c)
+	if err != nil {
+		code := http.StatusBadGateway
+		if errors.Is(err, errNoPR) {
+			code = http.StatusNotFound
+		}
+		fail(w, code, err.Error())
+		return nil, "", false
+	}
+	return p, prefix, true
+}
+
+// checkoutPR binds a checkout to its pull request: metadata, token, write
+// access, and the merge base with the PR's base branch for its file set.
+func (s *Server) checkoutPR(ctx context.Context, c checkout) (*prSession, error) {
+	branch := gitCurrentBranch(c.Abs)
+	s.prsMu.Lock()
+	b := s.prs[c.Prefix]
+	s.prsMu.Unlock()
+	if b != nil && b.branch == branch && (b.p != nil || time.Since(b.at) < noPRRetry) {
+		return b.p, b.err
+	}
+	p, err := newCheckoutPR(ctx, c)
+	s.prsMu.Lock()
+	if s.prs == nil {
+		s.prs = map[string]*checkoutPRBinding{}
+	}
+	s.prs[c.Prefix] = &checkoutPRBinding{branch: branch, p: p, err: err, at: time.Now()}
+	s.prsMu.Unlock()
+	return p, err
+}
+
+func newCheckoutPR(ctx context.Context, c checkout) (*prSession, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	provider := &GitHubProvider{}
+	token, _ := provider.ResolveToken(readSettings())
+	owner, repo, num, err := prNumberFor(ctx, token, c)
+	if err != nil {
+		return nil, err
+	}
+	target := PRTarget{Provider: "github", Owner: owner, Repo: repo, Number: num, URL: fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, num)}
+	meta, err := provider.FetchPR(ctx, target, token)
+	if err != nil {
+		return nil, err
+	}
+	diffBase, warning := "HEAD", ""
+	if remote := prRemoteName(c.Abs, owner, repo); remote != "" {
+		if mb := gitMergeBase(c.Abs, "HEAD", remote+"/"+meta.BaseRef); mb != "" {
+			diffBase = mb
+		}
+	}
+	if diffBase == "HEAD" {
+		warning = "could not resolve a merge-base with " + meta.BaseRef + "; fetch the base branch"
+	}
+	return &prSession{
+		provider: provider, target: target, meta: meta, token: token,
+		writeAccess: provider.CheckPushAccess(ctx, target, token),
+		diffBase:    diffBase, diffBaseWarning: warning, worktree: c.Abs,
+	}, nil
+}
+
+// prFiles is the PR's own file set (merge base..PR head) with status letters,
+// keyed by workspace path in workspace mode.
+func (s *Server) prFiles(p *prSession, prefix string) map[string]string {
+	if prefix == "" {
+		return s.ix.PRFiles()
+	}
+	out := map[string]string{}
+	for k, v := range gitFilesBetween(p.worktree, p.diffBase, p.meta.HeadSHA) {
+		out[prefix+"/"+k] = v
+	}
+	return out
+}
+
+// withPrefix makes a checkout-relative path workspace-relative.
+func withPrefix(prefix, path string) string {
+	if prefix == "" || path == "" {
+		return path
+	}
+	return prefix + "/" + path
 }

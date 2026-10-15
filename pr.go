@@ -435,19 +435,11 @@ func (p *prSession) Push() error {
 
 // ---------------------------------------------------------------- HTTP
 
-func (s *Server) prOrFail(w http.ResponseWriter) bool {
-	if s.pr == nil {
-		fail(w, http.StatusNotFound, "not a PR review session")
-		return false
-	}
-	return true
-}
-
 func (s *Server) handlePRMeta(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, prefix, ok := s.prFor(w, r)
+	if !ok {
 		return
 	}
-	p := s.pr
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	writeJSON(w, map[string]any{
@@ -465,7 +457,7 @@ func (s *Server) handlePRMeta(w http.ResponseWriter, r *http.Request) {
 		"diffBaseWarning": p.diffBaseWarning,
 		"headSHA":         p.meta.HeadSHA,
 		"url":             p.target.URL,
-		"files":           s.ix.PRFiles(),
+		"files":           s.prFiles(p, prefix),
 	})
 }
 
@@ -473,10 +465,10 @@ func (s *Server) handlePRMeta(w http.ResponseWriter, r *http.Request) {
 // (top-level and inline) directly from the forge -- always live, never
 // cached, since another reviewer may have commented since the page loaded.
 func (s *Server) handlePRExistingComments(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, prefix, ok := s.prFor(w, r)
+	if !ok {
 		return
 	}
-	p := s.pr
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	issue, review, err := p.provider.FetchComments(ctx, p.target, p.token)
@@ -490,6 +482,9 @@ func (s *Server) handlePRExistingComments(w http.ResponseWriter, r *http.Request
 	if review == nil {
 		review = []PRComment{}
 	}
+	for i := range review {
+		review[i].Path = withPrefix(prefix, review[i].Path)
+	}
 	writeJSON(w, map[string]any{"issueComments": issue, "reviewComments": review})
 }
 
@@ -498,13 +493,13 @@ func (s *Server) handlePRExistingComments(w http.ResponseWriter, r *http.Request
 // comments aren't tied to a review). Used both for starting a new top-level
 // comment and for "replying" to one, since GitHub doesn't thread these.
 func (s *Server) handlePRIssueCommentPost(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, _, ok := s.prFor(w, r)
+	if !ok {
 		return
 	}
 	if !localPost(w, r) {
 		return
 	}
-	p := s.pr
 	if p.token == "" {
 		fail(w, http.StatusForbidden, "no auth token configured; posting comments requires a GitHub token")
 		return
@@ -531,13 +526,13 @@ func (s *Server) handlePRIssueCommentPost(w http.ResponseWriter, r *http.Request
 // draft-then-submit review flow, matching GitHub's own dedicated reply
 // endpoint, which posts right away).
 func (s *Server) handlePRReviewCommentReply(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, _, ok := s.prFor(w, r)
+	if !ok {
 		return
 	}
 	if !localPost(w, r) {
 		return
 	}
-	p := s.pr
 	if p.token == "" {
 		fail(w, http.StatusForbidden, "no auth token configured; posting comments requires a GitHub token")
 		return
@@ -561,17 +556,18 @@ func (s *Server) handlePRReviewCommentReply(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handlePRComments(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, prefix, ok := s.prFor(w, r)
+	if !ok {
 		return
 	}
-	p := s.pr
 	switch r.Method {
 	case http.MethodGet:
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		comments := p.comments
-		if comments == nil {
-			comments = []prComment{}
+		comments := make([]prComment, 0, len(p.comments))
+		for _, c := range p.comments {
+			c.Path = withPrefix(prefix, c.Path)
+			comments = append(comments, c)
 		}
 		writeJSON(w, map[string]any{"comments": comments})
 	case http.MethodPost:
@@ -593,14 +589,24 @@ func (s *Server) handlePRComments(w http.ResponseWriter, r *http.Request) {
 		if side != "LEFT" {
 			side = "RIGHT"
 		}
+		path := body.Path
+		if prefix != "" {
+			// Drafts are stored relative to the checkout: that is GitHub's path.
+			if !strings.HasPrefix(path, prefix+"/") {
+				fail(w, http.StatusBadRequest, "path is outside this checkout")
+				return
+			}
+			path = strings.TrimPrefix(path, prefix+"/")
+		}
 		p.mu.Lock()
 		p.nextID++
-		c := prComment{ID: p.nextID, Path: body.Path, Line: body.Line, Side: side, Body: strings.TrimSpace(body.Body)}
+		c := prComment{ID: p.nextID, Path: path, Line: body.Line, Side: side, Body: strings.TrimSpace(body.Body)}
 		p.comments = append(p.comments, c)
-		if s.session != nil {
+		if s.session != nil && prefix == "" {
 			s.session.Update(func(ws *WorkspaceSession) { ws.Drafts = p.comments })
 		}
 		p.mu.Unlock()
+		c.Path = withPrefix(prefix, c.Path)
 		writeJSON(w, c)
 	default:
 		fail(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -608,14 +614,14 @@ func (s *Server) handlePRComments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePRCommentDelete(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, prefix, ok := s.prFor(w, r)
+	if !ok {
 		return
 	}
 	if !localPost(w, r) {
 		return
 	}
 	id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
-	p := s.pr
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i, c := range p.comments {
@@ -624,20 +630,20 @@ func (s *Server) handlePRCommentDelete(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if s.session != nil {
+	if s.session != nil && prefix == "" {
 		s.session.Update(func(ws *WorkspaceSession) { ws.Drafts = p.comments })
 	}
 	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (s *Server) handlePRSubmit(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, prefix, ok := s.prFor(w, r)
+	if !ok {
 		return
 	}
 	if !localPost(w, r) {
 		return
 	}
-	p := s.pr
 	if p.token == "" {
 		fail(w, http.StatusForbidden, "no auth token configured; review submission is read-only")
 		return
@@ -671,7 +677,7 @@ func (s *Server) handlePRSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Lock()
 	p.comments = nil
-	if s.session != nil {
+	if s.session != nil && prefix == "" {
 		s.session.Update(func(ws *WorkspaceSession) { ws.Drafts = nil })
 	}
 	p.mu.Unlock()
